@@ -26,7 +26,7 @@ function Invoke-Wrangler {
     Write-Host "wrangler $($Args -join ' ')"
     & $wrangler @Args
     if ($LASTEXITCODE -ne 0) {
-        throw "Wrangler command failed with exit code $LASTEXITCODE: wrangler $($Args -join ' ')"
+        throw "Wrangler command failed with exit code ${LASTEXITCODE}: wrangler $($Args -join ' ')"
     }
 }
 

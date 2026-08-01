@@ -1,25 +1,26 @@
 {
   "account": {
-    "name": "Devinhendrixrh@yahoo.com's Account",
-    "id": "f092682e1d6d301350206168e5abed3d"
+    "name": "Myfflapplicationadmin@gmail.com's Account",
+    "id": "de3d2228088ff7aeafea3fb03b2dd11f"
   },
   "domain": {
     "name": "myfflapp.com",
-    "cloudflare_zone_status": "not_found_in_account",
-    "action_required": "Add myfflapp.com as a Cloudflare zone and update registrar nameservers before Email Service/domain routing can be completed."
+    "cloudflare_zone_status": "found",
+    "zone_id": "d3dbc91bb61d7caf2d78e827e4fa776e",
+    "action_required": "Email Sending setup currently returns Cloudflare Unauthorized [2036]. Confirm Workers Paid/Email Sending access for this account and zone."
   },
   "d1_databases": {
     "CORE_DB": {
       "database_name": "myffl-core",
-      "database_id": "63f436f2-fba1-4031-8bc8-84c66b6e35d2"
+      "database_id": "ff175fca-1abc-42cf-94c1-b19b9b599cd6"
     },
     "NFL_DB": {
       "database_name": "myffl-nfl",
-      "database_id": "db8f78b4-4ff5-4e9d-83ef-2e873f52f5d5"
+      "database_id": "d50cefde-9a45-4d28-9a0c-4026d71eda4b"
     },
     "LEAGUE_DB_001": {
       "database_name": "myffl-leagues-001",
-      "database_id": "bd539544-593b-453a-8e74-855de9b4006c"
+      "database_id": "6fce562b-d57d-4e29-84c8-ce3c65546a78"
     }
   },
   "queues": {
@@ -32,7 +33,7 @@
   "pages": {
     "project_name": "myffl-mobile",
     "production_branch": "main",
-    "pages_dev_url": "https://myffl-mobile.pages.dev/"
+    "pages_dev_url": "https://myffl-mobile-bgq.pages.dev/"
   },
   "r2_buckets": {
     "status": "blocked_until_r2_enabled_in_dashboard",
@@ -42,7 +43,7 @@
     ]
   },
   "email_sending": {
-    "status": "blocked_until_domain_zone_exists_and_email_service_allows_account",
+    "status": "blocked_by_cloudflare_unauthorized_2036",
     "domain": "myfflapp.com",
     "from": "noreply@myfflapp.com"
   }
