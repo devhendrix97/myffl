@@ -1,0 +1,9 @@
+packages:
+  - "apps/*"
+  - "workers/*"
+  - "packages/*"
+  - "durable-objects/*"
+  - "workflows/*"
+allowBuilds:
+  esbuild: true
+  workerd: true

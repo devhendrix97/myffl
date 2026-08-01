@@ -1,0 +1,49 @@
+{
+  "account": {
+    "name": "Devinhendrixrh@yahoo.com's Account",
+    "id": "f092682e1d6d301350206168e5abed3d"
+  },
+  "domain": {
+    "name": "myfflapp.com",
+    "cloudflare_zone_status": "not_found_in_account",
+    "action_required": "Add myfflapp.com as a Cloudflare zone and update registrar nameservers before Email Service/domain routing can be completed."
+  },
+  "d1_databases": {
+    "CORE_DB": {
+      "database_name": "myffl-core",
+      "database_id": "63f436f2-fba1-4031-8bc8-84c66b6e35d2"
+    },
+    "NFL_DB": {
+      "database_name": "myffl-nfl",
+      "database_id": "db8f78b4-4ff5-4e9d-83ef-2e873f52f5d5"
+    },
+    "LEAGUE_DB_001": {
+      "database_name": "myffl-leagues-001",
+      "database_id": "bd539544-593b-453a-8e74-855de9b4006c"
+    }
+  },
+  "queues": {
+    "ESPN_UPDATES_QUEUE": "myffl-espn-updates",
+    "SCORING_QUEUE": "myffl-scoring",
+    "NOTIFICATIONS_QUEUE": "myffl-notifications",
+    "AUDIT_QUEUE": "myffl-audit",
+    "WAIVERS_QUEUE": "myffl-waivers"
+  },
+  "pages": {
+    "project_name": "myffl-mobile",
+    "production_branch": "main",
+    "pages_dev_url": "https://myffl-mobile.pages.dev/"
+  },
+  "r2_buckets": {
+    "status": "blocked_until_r2_enabled_in_dashboard",
+    "bucket_names": [
+      "myffl-assets",
+      "myffl-provider-archive"
+    ]
+  },
+  "email_sending": {
+    "status": "blocked_until_domain_zone_exists_and_email_service_allows_account",
+    "domain": "myfflapp.com",
+    "from": "noreply@myfflapp.com"
+  }
+}

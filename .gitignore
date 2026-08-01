@@ -1,0 +1,28 @@
+.DS_Store
+Thumbs.db
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+bin/
+obj/
+
+# Cloudflare / local runtime state
+.wrangler/
+.dev.vars
+.dev.vars.*
+
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+secrets/
+*.local.json
+
+# Scratch files
+tmp/
+

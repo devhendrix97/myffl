@@ -1,0 +1,17 @@
+{
+  "name": "myffl",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.9.0",
+  "scripts": {
+    "cf:whoami": "wrangler whoami",
+    "cf:login": "wrangler login",
+    "cf:provision": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/cloudflare/provision.ps1",
+    "cf:email:enable": "wrangler email sending enable myfflapp.com",
+    "cf:email:dns": "wrangler email sending dns get myfflapp.com",
+    "secrets:generate": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/generate-secrets.ps1"
+  },
+  "devDependencies": {
+    "wrangler": "latest"
+  }
+}
