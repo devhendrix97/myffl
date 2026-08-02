@@ -31,9 +31,8 @@ Current Cloudflare state is tracked in `infrastructure/cloudflare/resource-state
 
 Before the remaining resources can be completed:
 
-1. Enable R2 once in the Cloudflare Dashboard. Wrangler currently returns Cloudflare API code `10042` until this is done.
-2. Confirm the account plan supports Cloudflare Email Sending. Cloudflare docs currently list outbound Email Sending as a Workers Paid feature.
-3. Resolve Cloudflare Email Sending API error `Unauthorized [2036]` for zone `myfflapp.com`.
+1. Confirm the account plan supports Cloudflare Email Sending. Cloudflare docs currently list outbound Email Sending as a Workers Paid feature.
+2. Resolve Cloudflare Email Sending API error `Unauthorized [2036]` for zone `myfflapp.com`.
 
 ## Secrets
 

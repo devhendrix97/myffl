@@ -36,7 +36,7 @@
     "pages_dev_url": "https://myffl-mobile-bgq.pages.dev/"
   },
   "r2_buckets": {
-    "status": "blocked_until_r2_enabled_in_dashboard",
+    "status": "created",
     "bucket_names": [
       "myffl-assets",
       "myffl-provider-archive"
