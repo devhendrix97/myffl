@@ -7,7 +7,7 @@
     "name": "myfflapp.com",
     "cloudflare_zone_status": "found",
     "zone_id": "d3dbc91bb61d7caf2d78e827e4fa776e",
-    "action_required": "Email Sending setup currently returns Cloudflare Unauthorized [2036]. Confirm Workers Paid/Email Sending access for this account and zone."
+    "action_required": "Confirm Email Sending DNS records are present and verified in Cloudflare."
   },
   "d1_databases": {
     "CORE_DB": {
@@ -43,8 +43,9 @@
     ]
   },
   "email_sending": {
-    "status": "blocked_by_cloudflare_unauthorized_2036",
+    "status": "enabled",
     "domain": "myfflapp.com",
+    "tag": "0a661d51650649d68f52d4f3169cc645",
     "from": "noreply@myfflapp.com"
   }
 }

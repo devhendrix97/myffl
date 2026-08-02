@@ -31,8 +31,8 @@ Current Cloudflare state is tracked in `infrastructure/cloudflare/resource-state
 
 Before the remaining resources can be completed:
 
-1. Confirm the account plan supports Cloudflare Email Sending. Cloudflare docs currently list outbound Email Sending as a Workers Paid feature.
-2. Resolve Cloudflare Email Sending API error `Unauthorized [2036]` for zone `myfflapp.com`.
+1. Confirm the Email Sending DNS records for `myfflapp.com` show as verified in Cloudflare.
+2. Keep the Workers Paid plan enabled so transactional Email Sending remains available.
 
 ## Secrets
 
@@ -51,3 +51,5 @@ Cloudflare docs currently require Cloudflare DNS for Email Service. Outbound Ema
 The app will use the Worker `send_email` binding and send transactional email from:
 
 - `noreply@myfflapp.com`
+
+Email Sending is enabled for `myfflapp.com` with tag `0a661d51650649d68f52d4f3169cc645`.
