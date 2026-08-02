@@ -1,0 +1,9 @@
+{
+  "name": "myFFL",
+  "short_name": "myFFL",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#05080f",
+  "theme_color": "#1d4ed8",
+  "icons": []
+}

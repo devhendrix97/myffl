@@ -1,0 +1,225 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "myffl-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-02",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "head_sampling_rate": 1
+    }
+  },
+  "vars": {
+    "ENVIRONMENT": "local",
+    "APPLICATION_BASE_URL": "http://localhost:5173",
+    "API_BASE_URL": "http://localhost:8787",
+    "EMAIL_FROM_ADDRESS": "noreply@myfflapp.com",
+    "EMAIL_FROM_NAME": "myFFL"
+  },
+  "d1_databases": [
+    {
+      "binding": "CORE_DB",
+      "database_name": "myffl-core",
+      "database_id": "ff175fca-1abc-42cf-94c1-b19b9b599cd6",
+      "migrations_dir": "../../database/core/migrations"
+    },
+    {
+      "binding": "NFL_DB",
+      "database_name": "myffl-nfl",
+      "database_id": "d50cefde-9a45-4d28-9a0c-4026d71eda4b",
+      "migrations_dir": "../../database/nfl/migrations"
+    },
+    {
+      "binding": "LEAGUE_DB_001",
+      "database_name": "myffl-leagues-001",
+      "database_id": "6fce562b-d57d-4e29-84c8-ce3c65546a78",
+      "migrations_dir": "../../database/league-shard/migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ASSETS_BUCKET",
+      "bucket_name": "myffl-assets"
+    },
+    {
+      "binding": "PROVIDER_ARCHIVE_BUCKET",
+      "bucket_name": "myffl-provider-archive"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "ESPN_UPDATES_QUEUE",
+        "queue": "myffl-espn-updates"
+      },
+      {
+        "binding": "SCORING_QUEUE",
+        "queue": "myffl-scoring"
+      },
+      {
+        "binding": "NOTIFICATIONS_QUEUE",
+        "queue": "myffl-notifications"
+      },
+      {
+        "binding": "AUDIT_QUEUE",
+        "queue": "myffl-audit"
+      },
+      {
+        "binding": "WAIVERS_QUEUE",
+        "queue": "myffl-waivers"
+      }
+    ]
+  },
+  "send_email": [
+    {
+      "name": "EMAIL"
+    }
+  ],
+  "env": {
+    "production": {
+      "name": "myffl-api-production",
+      "vars": {
+        "ENVIRONMENT": "production",
+        "APPLICATION_BASE_URL": "https://app.myfflapp.com",
+        "API_BASE_URL": "https://api.myfflapp.com",
+        "EMAIL_FROM_ADDRESS": "noreply@myfflapp.com",
+        "EMAIL_FROM_NAME": "myFFL"
+      },
+      "d1_databases": [
+        {
+          "binding": "CORE_DB",
+          "database_name": "myffl-core",
+          "database_id": "ff175fca-1abc-42cf-94c1-b19b9b599cd6",
+          "migrations_dir": "../../database/core/migrations"
+        },
+        {
+          "binding": "NFL_DB",
+          "database_name": "myffl-nfl",
+          "database_id": "d50cefde-9a45-4d28-9a0c-4026d71eda4b",
+          "migrations_dir": "../../database/nfl/migrations"
+        },
+        {
+          "binding": "LEAGUE_DB_001",
+          "database_name": "myffl-leagues-001",
+          "database_id": "6fce562b-d57d-4e29-84c8-ce3c65546a78",
+          "migrations_dir": "../../database/league-shard/migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "ASSETS_BUCKET",
+          "bucket_name": "myffl-assets"
+        },
+        {
+          "binding": "PROVIDER_ARCHIVE_BUCKET",
+          "bucket_name": "myffl-provider-archive"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "ESPN_UPDATES_QUEUE",
+            "queue": "myffl-espn-updates"
+          },
+          {
+            "binding": "SCORING_QUEUE",
+            "queue": "myffl-scoring"
+          },
+          {
+            "binding": "NOTIFICATIONS_QUEUE",
+            "queue": "myffl-notifications"
+          },
+          {
+            "binding": "AUDIT_QUEUE",
+            "queue": "myffl-audit"
+          },
+          {
+            "binding": "WAIVERS_QUEUE",
+            "queue": "myffl-waivers"
+          }
+        ]
+      },
+      "send_email": [
+        {
+          "name": "EMAIL"
+        }
+      ],
+      "routes": [
+        {
+          "pattern": "api.myfflapp.com",
+          "custom_domain": true
+        }
+      ]
+    },
+    "staging": {
+      "name": "myffl-api-staging",
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "APPLICATION_BASE_URL": "https://staging.myfflapp.com",
+        "API_BASE_URL": "https://api-staging.myfflapp.com",
+        "EMAIL_FROM_ADDRESS": "noreply@myfflapp.com",
+        "EMAIL_FROM_NAME": "myFFL"
+      },
+      "d1_databases": [
+        {
+          "binding": "CORE_DB",
+          "database_name": "myffl-core",
+          "database_id": "ff175fca-1abc-42cf-94c1-b19b9b599cd6",
+          "migrations_dir": "../../database/core/migrations"
+        },
+        {
+          "binding": "NFL_DB",
+          "database_name": "myffl-nfl",
+          "database_id": "d50cefde-9a45-4d28-9a0c-4026d71eda4b",
+          "migrations_dir": "../../database/nfl/migrations"
+        },
+        {
+          "binding": "LEAGUE_DB_001",
+          "database_name": "myffl-leagues-001",
+          "database_id": "6fce562b-d57d-4e29-84c8-ce3c65546a78",
+          "migrations_dir": "../../database/league-shard/migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "ASSETS_BUCKET",
+          "bucket_name": "myffl-assets"
+        },
+        {
+          "binding": "PROVIDER_ARCHIVE_BUCKET",
+          "bucket_name": "myffl-provider-archive"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "ESPN_UPDATES_QUEUE",
+            "queue": "myffl-espn-updates"
+          },
+          {
+            "binding": "SCORING_QUEUE",
+            "queue": "myffl-scoring"
+          },
+          {
+            "binding": "NOTIFICATIONS_QUEUE",
+            "queue": "myffl-notifications"
+          },
+          {
+            "binding": "AUDIT_QUEUE",
+            "queue": "myffl-audit"
+          },
+          {
+            "binding": "WAIVERS_QUEUE",
+            "queue": "myffl-waivers"
+          }
+        ]
+      },
+      "send_email": [
+        {
+          "name": "EMAIL"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/apps/" />
+  <Folder Name="/apps/myffl-admin/">
+    <Project Path="apps/myffl-admin/MyFFL.Admin.csproj" />
+  </Folder>
+  <Folder Name="/apps/myffl-desktop/">
+    <Project Path="apps/myffl-desktop/MyFFL.Desktop.csproj" />
+  </Folder>
+</Solution>

@@ -4,6 +4,10 @@
   "private": true,
   "packageManager": "pnpm@11.9.0",
   "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "dev:api": "pnpm --filter @myffl/api dev",
+    "dev:mobile": "pnpm --filter @myffl/mobile dev",
     "cf:whoami": "wrangler whoami",
     "cf:login": "wrangler login",
     "cf:provision": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/cloudflare/provision.ps1",
@@ -12,6 +16,7 @@
     "secrets:generate": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/generate-secrets.ps1"
   },
   "devDependencies": {
+    "typescript": "^5.9.2",
     "wrangler": "latest"
   }
 }

@@ -33,7 +33,16 @@
   "pages": {
     "project_name": "myffl-mobile",
     "production_branch": "main",
-    "pages_dev_url": "https://myffl-mobile-bgq.pages.dev/"
+    "pages_dev_url": "https://myffl-mobile-bgq.pages.dev/",
+    "latest_deployment_url": "https://c6827128.myffl-mobile-bgq.pages.dev"
+  },
+  "workers": {
+    "api": {
+      "name": "myffl-api-production",
+      "custom_domain": "api.myfflapp.com",
+      "latest_version_id": "4ebf7879-2b43-4acd-82d3-0a453f7c4be1",
+      "dns_status": "custom domain deployed; local resolver did not resolve immediately after deployment"
+    }
   },
   "r2_buckets": {
     "status": "created",
