@@ -34,7 +34,7 @@
     "project_name": "myffl-mobile",
     "production_branch": "main",
     "pages_dev_url": "https://myffl-mobile-bgq.pages.dev/",
-    "latest_deployment_url": "https://a00fb8c6.myffl-mobile-bgq.pages.dev",
+    "latest_deployment_url": "https://55338237.myffl-mobile-bgq.pages.dev",
     "custom_domain": "https://app.myfflapp.com",
     "custom_domain_status": "active"
   },
@@ -42,10 +42,10 @@
     "api": {
       "name": "myffl-api-production",
       "custom_domain": "api.myfflapp.com",
-      "latest_version_id": "4bb15f94-60ef-4866-9763-0e57624e3ba7",
+      "latest_version_id": "e8193ea7-02bc-4ffb-b697-80b63f733103",
       "dns_status": "active",
       "health_status": "healthy",
-      "application_version": "0.7.0"
+      "application_version": "0.8.0"
     }
   },
   "r2_buckets": {

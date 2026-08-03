@@ -29,6 +29,7 @@ import { enqueueScheduledProviderWork, processProviderQueue, type ProviderJob } 
 import { handleGameFeedRequest } from "./game-feed";
 import { processScoringQueue, type ScoringJob } from "./score-processing";
 import { handleDraftRequest, processExpiredDrafts } from "./draft";
+import { handleTeamRequest } from "./team";
 
 export default {
   async fetch(request, env, ctx): Promise<Response> {
@@ -119,7 +120,7 @@ async function routeRequest(
         service: "myffl-api",
         environment: env.ENVIRONMENT,
         status: "healthy",
-        version: "0.7.0",
+        version: "0.8.0",
         utc: new Date().toISOString(),
       } satisfies HealthResponse,
     };
@@ -173,6 +174,8 @@ async function routeRequest(
   if (scoringResult) return scoringResult;
   const draftResult = await handleDraftRequest(request, url, env, ctx, correlationId);
   if (draftResult) return draftResult;
+  const teamResult = await handleTeamRequest(request, url, env, correlationId);
+  if (teamResult) return teamResult;
   const leagueResult = await handleLeagueRequest(request, url, env, ctx, correlationId);
   if (leagueResult) return leagueResult;
   return undefined;
@@ -180,8 +183,8 @@ async function routeRequest(
 
 function phaseStatus(): PhaseStatusResponse {
   return {
-    phase: "phase-6",
-    title: "Draft System",
+    phase: "phase-7",
+    title: "Team and Player Management",
     items: [
       {
         key: "cloudflare-resources",
@@ -242,6 +245,18 @@ function phaseStatus(): PhaseStatusResponse {
         label: "Live draft system",
         status: "available",
         summary: "Draft setup, board, server clock, queues, autopick, roster acquisition, and commissioner recovery controls are available.",
+      },
+      {
+        key: "team-management",
+        label: "Team and lineup management",
+        status: "available",
+        summary: "Managers can set legal weekly lineups, respect kickoff locks, preview optimization, and inspect live fantasy totals.",
+      },
+      {
+        key: "player-directory",
+        label: "Player directory and profiles",
+        status: "available",
+        summary: "League-aware search, ownership, injuries, watchlists, profiles, recent statistics, and comparison are available.",
       },
     ],
   };

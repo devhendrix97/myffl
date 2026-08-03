@@ -11,9 +11,12 @@ import type {
   LeagueDetail,
   LeagueFormat,
   LeagueInvitationResponse,
+  LeaguePlayerSearchItem,
+  LineupOptimizationResponse,
   LeaguePrivacy,
   LeagueScheduleInput,
   LeagueSummary,
+  PlayerProfileResponse,
   RosterPositionLimitInput,
   RosterSlotInput,
   ScoringCalculationType,
@@ -23,6 +26,7 @@ import type {
   ScoringPreviewResponse,
   ScoringRule,
   ScoringVersionSummary,
+  TeamLineupResponse,
   UpdateLeagueSettingsRequest,
 } from "@myffl/api-contracts";
 import {
@@ -73,7 +77,7 @@ const apiBaseUrl =
   (isLocalHost ? "http://localhost:8787" : "https://api.myfflapp.com");
 
 type WorkspaceView = "home" | "create" | "join" | "league" | "game";
-type LeagueTab = "overview" | "members" | "draft" | "scoring" | "settings";
+type LeagueTab = "overview" | "members" | "team" | "players" | "draft" | "scoring" | "settings";
 
 interface ApiEnvelope<T> {
   ok: boolean;
@@ -861,7 +865,7 @@ function LeagueDetailView({
         <span className={`league-state ${league.status}`}>{league.status}</span>
       </header>
       <div className="league-tabs" role="tablist">
-        {(["overview", "members", "draft", "scoring", "settings"] as LeagueTab[]).map((item) => (
+        {(["overview", "members", "team", "players", "draft", "scoring", "settings"] as LeagueTab[]).map((item) => (
           <button role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} type="button" key={item} onClick={() => setTab(item)}>{item}</button>
         ))}
       </div>
@@ -899,6 +903,8 @@ function LeagueDetailView({
         </div>
       )}
       {tab === "members" && <MembersView league={league} />}
+      {tab === "team" && <TeamView league={league} accessToken={accessToken} />}
+      {tab === "players" && <PlayersView league={league} accessToken={accessToken} />}
       {tab === "draft" && <DraftView league={league} accessToken={accessToken} />}
       {tab === "scoring" && <ScoringView league={league} accessToken={accessToken} canManage={canManage} />}
       {tab === "settings" && (
@@ -916,6 +922,146 @@ function LeagueDetailView({
     </div>
   );
 }
+
+function PlayersView({ league, accessToken }: { league: LeagueDetail; accessToken: string }) {
+  const [players, setPlayers] = useState<LeaguePlayerSearchItem[]>([]);
+  const [query, setQuery] = useState("");
+  const [position, setPosition] = useState("");
+  const [watchedOnly, setWatchedOnly] = useState(false);
+  const [profile, setProfile] = useState<PlayerProfileResponse | null>(null);
+  const [compare, setCompare] = useState<PlayerProfileResponse[]>([]);
+  const [busy, setBusy] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({ limit: "120" });
+        if (query.trim()) params.set("query", query.trim());
+        if (position) params.set("position", position);
+        if (watchedOnly) params.set("watched", "true");
+        const next = await leagueRequest<LeaguePlayerSearchItem[]>(`/api/leagues/${league.leagueId}/players?${params}`, accessToken);
+        if (active) { setPlayers(next); setError(""); }
+      } catch (requestError) {
+        if (active) setError(requestError instanceof Error ? requestError.message : "Unable to search players.");
+      } finally { if (active) setBusy(false); }
+    }, 180);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [accessToken, league.leagueId, position, query, watchedOnly, profile?.watched]);
+
+  async function openProfile(playerId: string, addToComparison = false) {
+    try {
+      const next = await leagueRequest<PlayerProfileResponse>(`/api/leagues/${league.leagueId}/players/${playerId}`, accessToken);
+      if (addToComparison) setCompare((current) => [...current.filter((item) => item.playerId !== next.playerId), next].slice(-2));
+      else setProfile(next);
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to load the player profile."); }
+  }
+
+  async function toggleWatch() {
+    if (!profile) return;
+    try { setProfile(await leagueRequest<PlayerProfileResponse>(`/api/leagues/${league.leagueId}/players/${profile.playerId}`, accessToken, { method: "POST", body: { watched: !profile.watched } })); }
+    catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to update the watchlist."); }
+  }
+
+  return <div className="player-directory">
+    {error && <InlineAlert message={error} onClose={() => setError("")}/>}
+    <header className="directory-heading"><div><p className="eyebrow">League player pool</p><h2>Players</h2><span>Search availability, injuries, profiles, and recent performance.</span></div></header>
+    <div className="directory-toolbar"><label><Search size={16}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search NFL players"/></label><select aria-label="Filter by position" value={position} onChange={(event) => setPosition(event.target.value)}><option value="">All positions</option>{["QB","RB","WR","TE","K","DST","DL","LB","DB"].map((item) => <option key={item}>{item}</option>)}</select><label className="watch-filter"><input type="checkbox" checked={watchedOnly} onChange={(event) => setWatchedOnly(event.target.checked)}/> Watchlist</label></div>
+    <div className="directory-layout"><section className="directory-table">{busy ? <div className="workspace-loading"><LoaderCircle className="spin" size={24}/><span>Loading players</span></div> : players.length ? players.map((player) => <div className="directory-row" key={player.playerId}><button className="player-name-button" onClick={() => void openProfile(player.playerId)}><strong>{player.displayName}</strong><small>{player.position} - {player.nflTeam ?? "FA"}</small></button><span className={player.rosteredByTeamName ? "ownership rostered" : "ownership available"}>{player.rosteredByTeamName ?? "Available"}</span><span>{player.injuryStatus ?? "Healthy"}</span><button className="icon-button" title="Compare player" aria-label={`Compare ${player.displayName}`} onClick={() => void openProfile(player.playerId, true)}><SlidersHorizontal size={16}/></button></div>) : <p className="muted-empty">No players match these filters.</p>}</section><aside className="directory-compare"><p className="eyebrow">Head to head</p><h3>Comparison</h3>{compare.length ? compare.map((player) => <div key={player.playerId}><strong>{player.displayName}</strong><span>{player.position} - {player.nflTeam ?? "FA"}</span><small>{player.injuryStatus ?? "No injury designation"}</small><b>{player.rosteredByTeamName ?? "Available"}</b></div>) : <p className="muted-empty">Use the compare control beside up to two players.</p>}</aside></div>
+    {profile && <div className="profile-scrim" role="presentation" onMouseDown={() => setProfile(null)}><section className="player-profile" role="dialog" aria-modal="true" aria-labelledby="directory-profile-title" onMouseDown={(event) => event.stopPropagation()}><button className="icon-button profile-close" aria-label="Close player profile" onClick={() => setProfile(null)}><X size={18}/></button><p className="eyebrow">{profile.position} - {profile.nflTeam ?? "Free agent"}</p><h2 id="directory-profile-title">{profile.displayName}</h2><p>{profile.rosteredByTeamName ? `Rostered by ${profile.rosteredByTeamName}` : "Available player"}</p>{profile.injuryStatus && <span className="profile-injury">{profile.injuryStatus}</span>}<button className="outline-button compact" onClick={() => void toggleWatch()}>{profile.watched ? "Remove watch" : "Add to watchlist"}</button><div className="profile-games"><h3>Recent games</h3>{profile.recentGames.length ? profile.recentGames.map((game) => <div key={game.eventId}><span>{game.eventId}</span><code>{formatProviderStats(game.stats as Record<string, string>)}</code></div>) : <p className="muted-empty">No recent production game statistics.</p>}</div></section></div>}
+  </div>;
+}
+
+function TeamView({ league, accessToken }: { league: LeagueDetail; accessToken: string }) {
+  const [lineup, setLineup] = useState<TeamLineupResponse | null>(null);
+  const [week, setWeek] = useState(1);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [profile, setProfile] = useState<PlayerProfileResponse | null>(null);
+  const [compare, setCompare] = useState<PlayerProfileResponse[]>([]);
+  const [optimization, setOptimization] = useState<LineupOptimizationResponse | null>(null);
+  const [busy, setBusy] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    setBusy(true);
+    leagueRequest<TeamLineupResponse>(`/api/leagues/${league.leagueId}/team?week=${week}`, accessToken)
+      .then((next) => { if (active) { setLineup(next); setError(""); } })
+      .catch((requestError) => { if (active) setError(requestError instanceof Error ? requestError.message : "Unable to load your team."); })
+      .finally(() => { if (active) setBusy(false); });
+    return () => { active = false; };
+  }, [accessToken, league.leagueId, week]);
+
+  async function moveSelected(slotType: string, slotIndex: number) {
+    if (!lineup || !selectedId) return;
+    const selected = lineup.players.find((player) => player.rosterPlayerId === selectedId);
+    if (!selected || selected.locked || !selected.eligibleSlots.includes(slotType)) return;
+    const occupant = lineup.players.find((player) => player.slotType === slotType && player.slotIndex === slotIndex);
+    const assignments = lineup.players.map((player) => {
+      if (player.rosterPlayerId === selected.rosterPlayerId) return { rosterPlayerId: player.rosterPlayerId, slotType, slotIndex };
+      if (occupant && player.rosterPlayerId === occupant.rosterPlayerId) return { rosterPlayerId: player.rosterPlayerId, slotType: selected.slotType, slotIndex: selected.slotIndex };
+      return { rosterPlayerId: player.rosterPlayerId, slotType: player.slotType, slotIndex: player.slotIndex };
+    });
+    setBusy(true);
+    try {
+      setLineup(await leagueRequest<TeamLineupResponse>(`/api/leagues/${league.leagueId}/team/lineup`, accessToken, { method: "PUT", body: { weekNumber: week, revisionNumber: lineup.revisionNumber, assignments } }));
+      setSelectedId(null);
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to save the lineup."); }
+    finally { setBusy(false); }
+  }
+
+  async function openProfile(playerId: string) {
+    try { setProfile(await leagueRequest<PlayerProfileResponse>(`/api/leagues/${league.leagueId}/players/${playerId}`, accessToken)); }
+    catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to load the player profile."); }
+  }
+
+  async function toggleWatch() {
+    if (!profile) return;
+    try { setProfile(await leagueRequest<PlayerProfileResponse>(`/api/leagues/${league.leagueId}/players/${profile.playerId}`, accessToken, { method: "POST", body: { watched: !profile.watched } })); }
+    catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to update the watchlist."); }
+  }
+
+  async function previewOptimization() {
+    setBusy(true);
+    try { setOptimization(await leagueRequest<LineupOptimizationResponse>(`/api/leagues/${league.leagueId}/team/optimize`, accessToken, { method: "POST", body: { weekNumber: week } })); }
+    catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to optimize the lineup."); }
+    finally { setBusy(false); }
+  }
+
+  async function applyOptimization() {
+    if (!lineup || !optimization) return;
+    setBusy(true);
+    try {
+      setLineup(await leagueRequest<TeamLineupResponse>(`/api/leagues/${league.leagueId}/team/lineup`, accessToken, { method: "PUT", body: { weekNumber: week, revisionNumber: optimization.revisionNumber, assignments: optimization.assignments } }));
+      setOptimization(null);
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to save the optimized lineup."); }
+    finally { setBusy(false); }
+  }
+
+  if (busy && !lineup) return <div className="workspace-loading"><LoaderCircle className="spin" size={28}/><span>Loading your team</span></div>;
+  if (!lineup) return <section className="team-empty">{error || "Draft players to build this roster."}</section>;
+  const slots = [...lineup.players.map((player) => ({ slotType: player.slotType, slotIndex: player.slotIndex, displayName: player.slotType })), ...lineup.emptySlots]
+    .filter((slot, index, values) => values.findIndex((item) => item.slotType === slot.slotType && item.slotIndex === slot.slotIndex) === index)
+    .sort((left, right) => lineupSlotOrder(left.slotType) - lineupSlotOrder(right.slotType) || left.slotIndex - right.slotIndex);
+  const selected = lineup.players.find((player) => player.rosterPlayerId === selectedId);
+
+  return <div className="team-room">
+    {error && <InlineAlert message={error} onClose={() => setError("")}/>}
+    <header className="team-heading"><div><p className="eyebrow">My team</p><h2>{lineup.teamName}</h2><span>{lineup.players.length} rostered players</span></div><label>Week<select value={week} onChange={(event) => setWeek(Number(event.target.value))}>{Array.from({ length: 18 }, (_, index) => <option key={index + 1} value={index + 1}>Week {index + 1}</option>)}</select></label></header>
+    <div className="team-layout">
+      <section className="lineup-sheet"><div className="section-heading"><div><p className="eyebrow">Week {week}</p><h2>Lineup</h2></div><span>Saved revision {lineup.revisionNumber}</span></div><div className="lineup-list">{slots.map((slot) => {
+        const player = lineup.players.find((item) => item.slotType === slot.slotType && item.slotIndex === slot.slotIndex);
+        const destination = Boolean(selected && selected.eligibleSlots.includes(slot.slotType) && !selected.locked && selected.rosterPlayerId !== player?.rosterPlayerId);
+        return <button className={`lineup-row ${selectedId === player?.rosterPlayerId ? "selected" : ""} ${destination ? "destination" : ""}`} type="button" key={`${slot.slotType}-${slot.slotIndex}`} onClick={() => destination ? void moveSelected(slot.slotType, slot.slotIndex) : player && setSelectedId(selectedId === player.rosterPlayerId ? null : player.rosterPlayerId)}><b>{slot.slotType}{slot.slotIndex > 1 ? ` ${slot.slotIndex}` : ""}</b>{player ? <><span><strong>{player.displayName}</strong><small>{player.position} - {player.nflTeam ?? "FA"}{player.injuryStatus ? ` - ${player.injuryStatus}` : ""}</small></span><span className={player.locked ? "player-lock locked" : "player-lock"}>{player.locked ? "Locked" : "Open"}</span><span className="lineup-points">{player.fantasyPoints ?? "-"}</span></> : <span className="empty-lineup-slot">Empty slot</span>}</button>;
+      })}</div></section>
+      <aside className="team-side"><div className="section-heading"><div><p className="eyebrow">Roster tools</p><h2>{selected ? selected.displayName : "Lineup controls"}</h2></div></div><button className="primary-button compact team-optimize" disabled={busy} onClick={() => void previewOptimization()}><SlidersHorizontal size={16}/> Optimize lineup</button>{selected ? <><p className="team-selection-note">Choose a highlighted destination to save an immediate swap.</p><button className="outline-button compact" onClick={() => void openProfile(selected.playerId)}>Player profile</button><button className="outline-button compact" onClick={async () => { const next = await leagueRequest<PlayerProfileResponse>(`/api/leagues/${league.leagueId}/players/${selected.playerId}`, accessToken); setCompare((current) => [...current.filter((item) => item.playerId !== next.playerId), next].slice(-2)); }}>Compare</button>{selected.locked && <p className="lineup-lock-note">This player is locked at NFL kickoff. Other players remain editable.</p>}</> : <p className="muted-empty">Select a roster row to move, inspect, or compare a player.</p>}{optimization && <div className="optimization-preview"><p className="eyebrow">Preview</p><h3>{optimization.changes.length ? `${optimization.changes.length} recommended moves` : "Lineup already optimized"}</h3>{optimization.changes.map((change) => <p key={change.rosterPlayerId}><strong>{change.displayName}</strong><span>{change.fromSlot} to {change.toSlot}</span></p>)}{optimization.changes.length > 0 && <button className="primary-button compact" disabled={busy} onClick={() => void applyOptimization()}><Check size={16}/> Confirm lineup</button>}<button className="outline-button compact" onClick={() => setOptimization(null)}>Dismiss preview</button></div>}{compare.length > 0 && <div className="player-compare"><p className="eyebrow">Comparison</p>{compare.map((player) => <div key={player.playerId}><strong>{player.displayName}</strong><span>{player.position} {player.nflTeam}</span><small>{player.injuryStatus ?? "No injury designation"}</small></div>)}</div>}</aside>
+    </div>
+    {profile && <div className="profile-scrim" role="presentation" onMouseDown={() => setProfile(null)}><section className="player-profile" role="dialog" aria-modal="true" aria-labelledby="player-profile-title" onMouseDown={(event) => event.stopPropagation()}><button className="icon-button profile-close" aria-label="Close player profile" onClick={() => setProfile(null)}><X size={18}/></button><p className="eyebrow">{profile.position} - {profile.nflTeam ?? "Free agent"}</p><h2 id="player-profile-title">{profile.displayName}</h2><p>{profile.rosteredByTeamName ? `Rostered by ${profile.rosteredByTeamName}` : "Available player"}</p>{profile.injuryStatus && <span className="profile-injury">{profile.injuryStatus}</span>}<button className="outline-button compact" onClick={() => void toggleWatch()}>{profile.watched ? "Remove watch" : "Add to watchlist"}</button><div className="profile-games"><h3>Recent games</h3>{profile.recentGames.length ? profile.recentGames.map((game) => <div key={game.eventId}><span>{game.eventId}</span><code>{formatProviderStats(game.stats as Record<string, string>)}</code></div>) : <p className="muted-empty">No recent production game statistics.</p>}</div></section></div>}
+  </div>;
+}
+
+function lineupSlotOrder(slotType: string): number { return ["QB","RB","WR","TE","FLEX","SUPERFLEX","K","DST","DL","LB","DB","IDP_FLEX","BENCH","IR","PUP","TAXI"].indexOf(slotType) + 1 || 99; }
 
 function DraftView({ league, accessToken }: { league: LeagueDetail; accessToken: string }) {
   const [room, setRoom] = useState<DraftRoomResponse | null>(null);

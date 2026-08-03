@@ -102,8 +102,8 @@
                     </Border>
                     <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource PanelBorderBrush}" BorderThickness="1" Padding="18">
                         <StackPanel>
-                            <TextBlock Text="Live Draft" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
-                            <TextBlock Text="Board, clock, queues, and autopick" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
+                            <TextBlock Text="Team Management" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
+                            <TextBlock Text="Lineups, locks, profiles, and optimizer" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
                             <TextBlock Text="Available" Foreground="#22C55E" FontWeight="Bold" Margin="0,18,0,0"/>
                         </StackPanel>
                     </Border>
@@ -119,7 +119,8 @@
                             <TextBlock Text="- League management: available" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
                             <TextBlock Text="- Custom scoring editor: available" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
                             <TextBlock Text="- ESPN synchronization and scoring: available" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
-                            <TextBlock Text="- Live draft and roster acquisition: available" Foreground="{StaticResource MutedTextBrush}"/>
+                            <TextBlock Text="- Live draft and roster acquisition: available" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
+                            <TextBlock Text="- Team, lineup, and player management: available" Foreground="{StaticResource MutedTextBrush}"/>
                         </StackPanel>
                     </StackPanel>
                 </Border>

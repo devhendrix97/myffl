@@ -331,6 +331,68 @@ export interface DraftQueueUpdateRequest {
   revisionNumber?: number;
 }
 
+export interface TeamPlayerView {
+  rosterPlayerId: string;
+  playerId: string;
+  displayName: string;
+  position: string;
+  nflTeam?: string;
+  injuryStatus?: string;
+  slotType: string;
+  slotIndex: number;
+  eligibleSlots: string[];
+  locked: boolean;
+  locksAtUtc?: string;
+  fantasyPoints?: number;
+}
+
+export interface TeamLineupResponse {
+  leagueId: string;
+  seasonId: string;
+  fantasyTeamId: string;
+  teamName: string;
+  weekNumber: number;
+  revisionNumber: number;
+  players: TeamPlayerView[];
+  emptySlots: Array<{ slotType: string; slotIndex: number; displayName: string }>;
+}
+
+export interface SaveLineupRequest {
+  weekNumber: number;
+  revisionNumber: number;
+  assignments: Array<{ rosterPlayerId: string; slotType: string; slotIndex: number }>;
+}
+
+export interface LineupOptimizationResponse {
+  weekNumber: number;
+  revisionNumber: number;
+  assignments: SaveLineupRequest["assignments"];
+  changes: Array<{ rosterPlayerId: string; displayName: string; fromSlot: string; toSlot: string }>;
+}
+
+export interface PlayerProfileResponse {
+  playerId: string;
+  displayName: string;
+  position: string;
+  nflTeam?: string;
+  injuryStatus?: string;
+  rosteredByTeamId?: string;
+  rosteredByTeamName?: string;
+  watched: boolean;
+  recentGames: Array<{ eventId: string; stats: Record<string, unknown>; fantasyPoints?: number }>;
+}
+
+export interface LeaguePlayerSearchItem {
+  playerId: string;
+  displayName: string;
+  position: string;
+  nflTeam?: string;
+  injuryStatus?: string;
+  rosteredByTeamId?: string;
+  rosteredByTeamName?: string;
+  watched: boolean;
+}
+
 export interface ScoringPresetSummary {
   presetKey: ScoringPresetKey;
   displayName: string;
