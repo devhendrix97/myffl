@@ -79,9 +79,14 @@ interface SimulationPlay {
   playType: string; playText: string; statYardage: number; homeScore: number; awayScore: number;
   scoringPlay: number; turnover: number;
 }
-interface SimulationPlayer { displayName: string; position: string; stats: Record<string, string> }
+interface ScoreBreakdown { displayName: string; rawValue: number | number[]; points: number; explanation: string }
+interface SimulationPlayer {
+  eventId: string; playerId: string; displayName: string; position: string; team?: string;
+  stats: Record<string, string>; fantasyPoints?: number; scoreRevision?: number; scoringBreakdown: ScoreBreakdown[];
+}
 interface GameFeed {
   games: SimulationGame[]; players: SimulationPlayer[]; plays: SimulationPlay[]; currentPlay: SimulationPlay | null;
+  scoring: { leagueId: string; leagueName: string; versionNumber: number } | null;
 }
 
 class LeagueApiError extends Error {
@@ -260,7 +265,7 @@ export function LeagueWorkspace({
             onChanged={acceptLeague}
           />
         ) : view === "game" ? (
-          <GameCenterView accessToken={session.accessToken} />
+          <GameCenterView accessToken={session.accessToken} leagues={leagues} />
         ) : (
           <LeagueHome
             session={session}
@@ -275,29 +280,31 @@ export function LeagueWorkspace({
   );
 }
 
-function GameCenterView({ accessToken }: { accessToken: string }) {
+function GameCenterView({ accessToken, leagues }: { accessToken: string; leagues: LeagueSummary[] }) {
   const [dashboard, setDashboard] = useState<GameFeed | null>(null);
   const [error, setError] = useState("");
+  const [leagueId, setLeagueId] = useState(leagues[0]?.leagueId ?? "");
 
   useEffect(() => {
     let active = true;
     async function refresh() {
       try {
-        const next = await leagueRequest<GameFeed>("/api/games/current", accessToken);
+        const query = leagueId ? `?leagueId=${encodeURIComponent(leagueId)}` : "";
+        const next = await leagueRequest<GameFeed>(`/api/games/current${query}`, accessToken);
         if (active) { setDashboard(next); setError(""); }
       } catch (requestError) {
-        if (active) setError(requestError instanceof Error ? requestError.message : "Unable to load the test game.");
+        if (active) setError(requestError instanceof Error ? requestError.message : "Unable to load Game Center.");
       }
     }
     void refresh();
     const timer = window.setInterval(() => void refresh(), 1500);
     return () => { active = false; window.clearInterval(timer); };
-  }, [accessToken]);
+  }, [accessToken, leagueId]);
 
   const game = dashboard?.games[0];
   return (
     <div className="league-page live-test-page">
-      <header className="page-heading"><div><p className="eyebrow">NFL live data</p><h1>Game center</h1></div>{game && <span className={`test-run-state ${game.status}`}>{game.status === "post" ? "final" : game.statusDetail}</span>}</header>
+      <header className="page-heading"><div><p className="eyebrow">NFL live data</p><h1>Game center</h1></div><div className="game-center-controls">{leagues.length > 0 && <label><span>Scoring for</span><select value={leagueId} onChange={(event) => setLeagueId(event.target.value)}>{leagues.map((league) => <option key={league.leagueId} value={league.leagueId}>{league.leagueName}</option>)}</select></label>}{game && <span className={`test-run-state ${game.status}`}>{game.status === "post" ? "final" : game.statusDetail}</span>}</div></header>
       {error && <InlineAlert message={error} onClose={() => setError("")} />}
       {!game ? (
         <section className="test-empty"><Activity size={32}/><h2>No active game data</h2><p>Scheduled and live NFL games will appear here.</p></section>
@@ -309,7 +316,7 @@ function GameCenterView({ accessToken }: { accessToken: string }) {
         </section>
         {dashboard.currentPlay && <section className={`current-play ${dashboard.currentPlay.scoringPlay ? "score" : ""}`}><p>Q{dashboard.currentPlay.period} {dashboard.currentPlay.clock} · {dashboard.currentPlay.playType}</p><strong>{dashboard.currentPlay.playText}</strong><span>{dashboard.currentPlay.awayScore} - {dashboard.currentPlay.homeScore}</span></section>}
         <div className="test-game-grid">
-          <section className="test-data-section"><div className="section-heading"><div><p className="eyebrow">Provider box score</p><h2>Player statistics</h2></div><RefreshCw size={18}/></div><div className="test-player-list">{dashboard.players.map((player) => <div key={`${player.displayName}-${player.position}`}><span><b>{player.displayName}</b><small>{player.position}</small></span><code>{formatProviderStats(player.stats)}</code></div>)}</div></section>
+          <section className="test-data-section"><div className="section-heading"><div><p className="eyebrow">{dashboard.scoring ? `${dashboard.scoring.leagueName} - scoring v${dashboard.scoring.versionNumber}` : "Provider box score"}</p><h2>Player statistics</h2></div><RefreshCw size={18}/></div><div className="test-player-list">{dashboard.players.map((player) => <div key={`${player.eventId}-${player.playerId}`}><span><b>{player.displayName}</b><small>{player.team} {player.position}</small></span><code>{formatProviderStats(player.stats)}</code>{player.fantasyPoints !== undefined && <strong className="fantasy-points">{formatFantasyPoints(player.fantasyPoints)} pts</strong>}{player.scoringBreakdown.length > 0 && <details><summary>Point breakdown</summary><div>{player.scoringBreakdown.map((item) => <p key={item.displayName}><span>{item.displayName}</span><small>{formatRawValue(item.rawValue)}</small><b className={item.points < 0 ? "negative" : ""}>{item.points > 0 ? "+" : ""}{formatFantasyPoints(item.points)}</b></p>)}</div></details>}</div>)}</div></section>
           <section className="test-data-section"><div className="section-heading"><div><p className="eyebrow">Game feed</p><h2>Play by play</h2></div><Radio size={18}/></div><div className="test-play-list">{dashboard.plays.map((play) => <div className={play.scoringPlay ? "score" : play.turnover ? "turnover" : ""} key={play.playId}><time>Q{play.period} {play.clock}</time><p>{play.playText}</p><strong>{play.awayScore}-{play.homeScore}</strong></div>)}</div></section>
         </div>
       </>}
@@ -319,6 +326,14 @@ function GameCenterView({ accessToken }: { accessToken: string }) {
 
 function formatProviderStats(stats: Record<string, string>): string {
   return Object.entries(stats).filter(([, value]) => value !== "0").map(([key, value]) => `${key.split(":")[1]} ${value}`).join("  ·  ") || "No recorded stats";
+}
+
+function formatFantasyPoints(value: number): string {
+  return value.toFixed(3).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+}
+
+function formatRawValue(value: number | number[]): string {
+  return Array.isArray(value) ? value.join(", ") : String(value);
 }
 
 function LeagueHome({

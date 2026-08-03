@@ -35,7 +35,7 @@ export interface PhaseStatusItem {
 }
 
 export interface PhaseStatusResponse {
-  phase: "phase-1" | "phase-2" | "phase-3" | "phase-4";
+  phase: "phase-1" | "phase-2" | "phase-3" | "phase-4" | "phase-5";
   title: string;
   items: PhaseStatusItem[];
 }

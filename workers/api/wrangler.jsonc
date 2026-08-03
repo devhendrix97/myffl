@@ -80,6 +80,13 @@
         "max_batch_timeout": 5,
         "max_retries": 5,
         "dead_letter_queue": "myffl-dead-letter"
+      },
+      {
+        "queue": "myffl-scoring",
+        "max_batch_size": 5,
+        "max_batch_timeout": 2,
+        "max_retries": 5,
+        "dead_letter_queue": "myffl-dead-letter"
       }
     ]
   },
@@ -167,6 +174,13 @@
             "queue": "myffl-espn-updates",
             "max_batch_size": 10,
             "max_batch_timeout": 5,
+            "max_retries": 5,
+            "dead_letter_queue": "myffl-dead-letter"
+          },
+          {
+            "queue": "myffl-scoring",
+            "max_batch_size": 5,
+            "max_batch_timeout": 2,
             "max_retries": 5,
             "dead_letter_queue": "myffl-dead-letter"
           }

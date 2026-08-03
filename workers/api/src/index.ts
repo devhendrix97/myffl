@@ -27,6 +27,7 @@ import { handleScoringRequest } from "./scoring";
 import { handleAdminRequest } from "./admin";
 import { enqueueScheduledProviderWork, processProviderQueue, type ProviderJob } from "./provider";
 import { handleGameFeedRequest } from "./game-feed";
+import { processScoringQueue, type ScoringJob } from "./score-processing";
 
 export default {
   async fetch(request, env, ctx): Promise<Response> {
@@ -94,8 +95,13 @@ export default {
     ctx.waitUntil(enqueueScheduledProviderWork(env));
   },
   async queue(batch, env): Promise<void> {
-    if (batch.queue !== "myffl-espn-updates") return;
-    await processProviderQueue(batch as MessageBatch<ProviderJob>, env);
+    if (batch.queue === "myffl-espn-updates") {
+      await processProviderQueue(batch as MessageBatch<ProviderJob>, env);
+      return;
+    }
+    if (batch.queue === "myffl-scoring") {
+      await processScoringQueue(batch as MessageBatch<ScoringJob>, env);
+    }
   },
 } satisfies ExportedHandler<Env>;
 
@@ -112,7 +118,7 @@ async function routeRequest(
         service: "myffl-api",
         environment: env.ENVIRONMENT,
         status: "healthy",
-        version: "0.5.2",
+        version: "0.6.0",
         utc: new Date().toISOString(),
       } satisfies HealthResponse,
     };
@@ -171,8 +177,8 @@ async function routeRequest(
 
 function phaseStatus(): PhaseStatusResponse {
   return {
-    phase: "phase-4",
-    title: "ESPN Data Integration",
+    phase: "phase-5",
+    title: "Live Scoring Engine",
     items: [
       {
         key: "cloudflare-resources",
@@ -221,6 +227,12 @@ function phaseStatus(): PhaseStatusResponse {
         label: "Provider test mode",
         status: "available",
         summary: "Administrators can replay deterministic ESPN-shaped game updates in an isolated data scope.",
+      },
+      {
+        key: "live-scoring",
+        label: "League-specific live scoring",
+        status: "available",
+        summary: "Provider statistics are scored independently for each league with component breakdowns and preserved revisions.",
       },
     ],
   };

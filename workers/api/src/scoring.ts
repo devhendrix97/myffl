@@ -255,41 +255,57 @@ async function ensureCurrentConfiguration(
   principal: AccessTokenPrincipal,
   env: Env,
 ): Promise<void> {
-  const season = await context.db.prepare(
+  await ensureSeasonScoringConfiguration(
+    context.db,
+    context.leagueId,
+    context.seasonId,
+    principal.userId,
+    env,
+  );
+}
+
+export async function ensureSeasonScoringConfiguration(
+  db: D1Database,
+  leagueId: string,
+  seasonId: string,
+  userId: string,
+  env: Env,
+): Promise<void> {
+  const season = await db.prepare(
     "select scoring_version_id from league_seasons where league_season_id = ?1",
-  ).bind(context.seasonId).first<{ scoring_version_id: string | null }>();
+  ).bind(seasonId).first<{ scoring_version_id: string | null }>();
   if (season?.scoring_version_id) return;
 
-  const setting = await context.db.prepare(
+  const setting = await db.prepare(
     "select value_json from league_settings where league_id = ?1 and setting_key = 'scoring_preset'",
-  ).bind(context.leagueId).first<{ value_json: string }>();
+  ).bind(leagueId).first<{ value_json: string }>();
   const presetKey = normalizePresetKey(setting ? JSON.parse(setting.value_json) : "standard");
   const presetRules = await getPresetRules(env.NFL_DB, presetKey);
   const now = new Date().toISOString();
   const versionId = newId("scv");
   const statements = configurationInsertStatements(
-    context.db,
+    db,
     versionId,
-    context.seasonId,
+    seasonId,
     1,
     "active",
     presetKey,
-    principal.userId,
+    userId,
     now,
     presetRules.map((row) => ruleFromRow(row)),
     true,
   );
   statements.push(
-    context.db.prepare(
+    db.prepare(
       "update league_seasons set scoring_version_id = ?1, updated_at_utc = ?2 where league_season_id = ?3 and scoring_version_id is null",
-    ).bind(versionId, now, context.seasonId),
+    ).bind(versionId, now, seasonId),
   );
   try {
-    await context.db.batch(statements);
+    await db.batch(statements);
   } catch (error) {
-    const existing = await context.db.prepare(
+    const existing = await db.prepare(
       "select scoring_version_id from league_seasons where league_season_id = ?1",
-    ).bind(context.seasonId).first<{ scoring_version_id: string | null }>();
+    ).bind(seasonId).first<{ scoring_version_id: string | null }>();
     if (!existing?.scoring_version_id) throw error;
   }
 }

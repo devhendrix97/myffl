@@ -1,4 +1,5 @@
 import { ApiException } from "./http";
+import type { ScoringJob } from "./score-processing";
 
 const PROVIDER = "espn";
 const PARSER_VERSION = "espn-nfl-1.0.0";
@@ -358,6 +359,12 @@ async function ingestSummary(context: SyncContext, payload: JsonObject, eventPro
   }
   if (statements.length) await context.env.NFL_DB.batch(statements);
   await ingestPlays(context, payload, eventId);
+  await context.env.SCORING_QUEUE.send({
+    type: "score-event",
+    eventId,
+    dataScope: context.scope,
+    sourceUpdatedAtUtc: context.now,
+  } satisfies ScoringJob);
 }
 
 async function ingestPlays(context: SyncContext, payload: JsonObject, eventId: string): Promise<void> {
