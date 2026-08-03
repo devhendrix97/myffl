@@ -1951,6 +1951,46 @@ textarea {
 .scoring-history p > time { color: #8390a1; font-size: 10px; }
 .scoring-history p > time { text-align: right; }
 
+.live-test-page { min-width: 0; }
+.test-run-state { border: 1px solid #476079; border-radius: 4px; background: #101925; padding: 7px 10px; color: #aab6c5; font-size: 10px; font-weight: 800; text-transform: uppercase; }
+.test-run-state.playing { border-color: #18864a; background: #0d2b1b; color: #78dda1; }
+.test-run-state.paused { border-color: #ba7b13; background: #302008; color: #f2c76b; }
+.test-run-state.completed { border-color: #347cf5; background: #10234a; color: #8bb7ff; }
+.test-empty { min-height: 360px; display: grid; place-content: center; justify-items: center; border: 1px solid #303c4e; color: #8f9bad; text-align: center; }
+.test-empty h2 { margin: 14px 0 4px; color: #fff; font-size: 20px; }
+.test-empty p { margin: 0; }
+.test-scoreboard { min-height: 126px; display: grid; grid-template-columns: minmax(180px, 1fr) 170px minmax(180px, 1fr); align-items: center; border: 1px solid #344154; background: #0a111c; }
+.test-scoreboard > div { display: flex; align-items: center; justify-content: center; gap: 20px; }
+.test-scoreboard > div strong { font-size: 42px; line-height: 1; }
+.test-scoreboard > section { display: grid; justify-items: center; gap: 4px; border-right: 1px solid #303c4e; border-left: 1px solid #303c4e; color: #8d9bad; }
+.test-scoreboard > section span { color: #75a9ff; font-size: 10px; font-weight: 900; text-transform: uppercase; }
+.test-scoreboard > section b { color: #fff; font-size: 24px; }
+.test-scoreboard > section small { font-size: 9px; }
+.test-team-mark { min-width: 54px; min-height: 38px; display: grid; place-content: center; border: 1px solid #45566d; border-radius: 4px; font-size: 13px; font-weight: 900; }
+.test-team-mark.home { border-color: #347cf5; background: #153477; }
+.test-team-mark.away { border-color: #dc2626; background: #65151c; }
+.test-progress { height: 5px; overflow: hidden; background: #1a2635; }
+.test-progress span { display: block; height: 100%; background: #347cf5; transition: width 180ms ease; }
+.current-play { min-height: 74px; display: grid; grid-template-columns: 120px minmax(0, 1fr) 64px; align-items: center; gap: 15px; margin-top: 14px; border-left: 3px solid #347cf5; background: #101925; padding: 12px 16px; }
+.current-play.score { border-left-color: #22c55e; }
+.current-play p { margin: 0; color: #8090a4; font-size: 10px; text-transform: uppercase; }
+.current-play strong { font-size: 13px; }
+.current-play > span { color: #fff; font-size: 18px; font-weight: 800; text-align: right; }
+.test-game-grid { display: grid; grid-template-columns: minmax(360px, 0.9fr) minmax(420px, 1.1fr); gap: 22px; margin-top: 24px; }
+.test-data-section { min-width: 0; }
+.test-data-section .section-heading { padding-bottom: 10px; border-bottom: 1px solid #303c4e; }
+.test-player-list > div { min-height: 54px; display: grid; grid-template-columns: 155px minmax(0, 1fr); align-items: center; gap: 12px; border-bottom: 1px solid #273243; }
+.test-player-list span { display: grid; }
+.test-player-list small { color: #728096; font-size: 9px; }
+.test-player-list code { overflow: hidden; color: #a7b8ce; font-family: Consolas, monospace; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.test-play-list { max-height: 480px; overflow-y: auto; }
+.test-play-list > div { min-height: 58px; display: grid; grid-template-columns: 68px minmax(0, 1fr) 42px; align-items: center; gap: 10px; border-bottom: 1px solid #273243; padding: 8px 0; }
+.test-play-list > div.score { border-left: 2px solid #22c55e; padding-left: 9px; }
+.test-play-list > div.turnover { border-left: 2px solid #dc2626; padding-left: 9px; }
+.test-play-list time { color: #8290a3; font-size: 9px; }
+.test-play-list p { margin: 0; font-size: 11px; line-height: 16px; }
+.test-play-list strong { font-size: 11px; text-align: right; }
+
 @media (max-width: 1080px) {
   .league-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .metric-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1964,6 +2004,7 @@ textarea {
   .scoring-rule { grid-template-columns: 42px minmax(200px, 1fr) minmax(150px, 0.65fr) 100px; }
   .apply-controls { grid-template-columns: minmax(220px, 1fr) 140px 140px; }
   .apply-controls .preview-button { grid-column: 1 / -1; justify-self: end; }
+  .test-game-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 820px) {
@@ -2056,4 +2097,12 @@ textarea {
   .scoring-history p { grid-template-columns: 90px 1fr; padding: 8px 0; }
   .scoring-history p > time { text-align: left; }
   .tier-editor > div { grid-template-columns: repeat(3, minmax(0, 1fr)) 38px; }
+  .test-scoreboard { grid-template-columns: 1fr 100px 1fr; min-height: 100px; }
+  .test-scoreboard > div { gap: 8px; }
+  .test-scoreboard > div strong { font-size: 30px; }
+  .test-team-mark { min-width: 42px; min-height: 34px; font-size: 10px; }
+  .test-scoreboard > section b { font-size: 18px; }
+  .current-play { grid-template-columns: 1fr 52px; }
+  .current-play p { grid-column: 1 / -1; }
+  .test-player-list > div { grid-template-columns: 125px minmax(0, 1fr); }
 }

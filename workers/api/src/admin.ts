@@ -2,6 +2,7 @@ import type { HandlerResult } from "./auth";
 import { authenticate } from "./auth";
 import { ApiException, readJson } from "./http";
 import { ingestReplayFrame, runProviderJob, type ProviderJob } from "./provider";
+import { fullGameReplayFrames, replayScenarioId, replayScenarioName } from "./replay-scenario";
 
 interface AdminPrincipal { userId: string; role: string }
 interface SimulationRow {
@@ -106,9 +107,10 @@ async function simulationDashboard(env: Env): Promise<unknown> {
   let events: unknown[] = [];
   let games: unknown[] = [];
   let players: unknown[] = [];
+  let plays: unknown[] = [];
   if (active?.runId) {
     const scope = `simulation:${active.runId}`;
-    const [eventRows, gameRows, playerRows] = await Promise.all([
+    const [eventRows, gameRows, playerRows, playRows] = await Promise.all([
       env.NFL_DB.prepare(
         `select frame_number as frameNumber, event_type as eventType, message, created_at_utc as createdAtUtc
          from simulation_event_log where simulation_run_id = ?1 order by created_at_utc desc limit 20`,
@@ -128,16 +130,30 @@ async function simulationDashboard(env: Env): Promise<unknown> {
          from nfl_player_game_stats stats join nfl_players players on players.nfl_player_id = stats.nfl_player_id
          where stats.data_scope = ?1 order by players.display_name limit 30`,
       ).bind(scope).all(),
+      env.NFL_DB.prepare(
+        `select provider_play_id as playId, sequence_number as sequenceNumber, drive_id as driveId,
+          period, clock, play_type as playType, play_text as playText, stat_yardage as statYardage,
+          home_score as homeScore, away_score as awayScore, scoring_play as scoringPlay,
+          turnover from nfl_event_plays where data_scope = ?1 order by sequence_number desc limit 80`,
+      ).bind(scope).all(),
     ]);
-    events = eventRows.results; games = gameRows.results; players = playerRows.results;
+    events = eventRows.results;
+    games = gameRows.results;
+    players = playerRows.results.map((row) => {
+      const value = row as { displayName?: string; position?: string; statsJson?: string };
+      return { displayName: value.displayName, position: value.position, stats: safeJson(value.statsJson, {}) };
+    });
+    plays = playRows.results;
   }
   return {
-    scenario: { id: "demo-live-game", name: "Sunday Game Simulation", frameCount: replayFrames.length },
+    scenario: { id: replayScenarioId, name: replayScenarioName, frameCount: fullGameReplayFrames.length },
     runs: runs.results,
     active: active ?? null,
     events,
     games,
     players,
+    plays,
+    currentPlay: plays[0] ?? null,
   };
 }
 
@@ -149,18 +165,18 @@ async function createSimulation(env: Env, userId: string, requestedSpeed?: numbe
     env.NFL_DB.prepare(
       `insert into simulation_scenarios
         (simulation_scenario_id, name, description, frame_count, fixture_prefix, created_at_utc)
-       values ('demo-live-game', 'Sunday Game Simulation', 'Deterministic ESPN-shaped game progression.', ?1,
-        'built-in/demo-live-game', ?2)
+       values (?1, ?2, 'Deterministic full-game ESPN-shaped play, drive, score, and box-score progression.', ?3,
+        'built-in/full-sunday-game', ?4)
        on conflict(simulation_scenario_id) do update set frame_count = excluded.frame_count`,
-    ).bind(replayFrames.length, now),
+    ).bind(replayScenarioId, replayScenarioName, fullGameReplayFrames.length, now),
     env.NFL_DB.prepare(
       `insert into simulation_runs
         (simulation_run_id, simulation_scenario_id, created_by_user_id, status,
          speed_multiplier, current_frame, created_at_utc, updated_at_utc)
-       values (?1, 'demo-live-game', ?2, 'ready', ?3, -1, ?4, ?4)`,
-    ).bind(id, userId, speed, now),
+       values (?1, ?2, ?3, 'ready', ?4, -1, ?5, ?5)`,
+    ).bind(id, replayScenarioId, userId, speed, now),
   ]);
-  return { runId: id, status: "ready", speedMultiplier: speed, currentFrame: -1, frameCount: replayFrames.length };
+  return await actOnSimulation(env, id, "step");
 }
 
 async function actOnSimulation(env: Env, runId: string, action: string): Promise<Record<string, unknown>> {
@@ -172,19 +188,20 @@ async function actOnSimulation(env: Env, runId: string, action: string): Promise
   if (action === "play" || action === "pause") {
     const status = action === "play" ? "playing" : "paused";
     await updateRunStatus(env, runId, status);
-    return { runId, status, currentFrame: run.current_frame, frameCount: replayFrames.length };
+    return { runId, status, currentFrame: run.current_frame, frameCount: fullGameReplayFrames.length };
   }
   if (action === "stop") {
     const now = new Date().toISOString();
     await env.NFL_DB.prepare(
       `update simulation_runs set status = 'stopped', stopped_at_utc = ?2, updated_at_utc = ?2 where simulation_run_id = ?1`,
     ).bind(runId, now).run();
-    return { runId, status: "stopped", currentFrame: run.current_frame, frameCount: replayFrames.length };
+    return { runId, status: "stopped", currentFrame: run.current_frame, frameCount: fullGameReplayFrames.length };
   }
   if (action === "reset") {
     const scope = `simulation:${runId}`;
     await env.NFL_DB.batch([
       env.NFL_DB.prepare(`delete from nfl_player_game_stats where data_scope = ?1`).bind(scope),
+      env.NFL_DB.prepare(`delete from nfl_event_plays where data_scope = ?1`).bind(scope),
       env.NFL_DB.prepare(`delete from nfl_event_snapshots where data_scope = ?1`).bind(scope),
       env.NFL_DB.prepare(`delete from nfl_team_snapshots where data_scope = ?1`).bind(scope),
       env.NFL_DB.prepare(`delete from simulation_event_log where simulation_run_id = ?1`).bind(runId),
@@ -193,17 +210,17 @@ async function actOnSimulation(env: Env, runId: string, action: string): Promise
           updated_at_utc = ?2, stopped_at_utc = null where simulation_run_id = ?1`,
       ).bind(runId, new Date().toISOString()),
     ]);
-    return { runId, status: "ready", currentFrame: -1, frameCount: replayFrames.length };
+    return { runId, status: "ready", currentFrame: -1, frameCount: fullGameReplayFrames.length };
   }
   if (run.status === "stopped") throw new ApiException(409, "simulation_stopped", "Reset a stopped simulation before stepping it.");
   const nextFrame = run.current_frame + 1;
-  if (nextFrame >= replayFrames.length) {
+  if (nextFrame >= fullGameReplayFrames.length) {
     await updateRunStatus(env, runId, "completed");
-    return { runId, status: "completed", currentFrame: run.current_frame, frameCount: replayFrames.length };
+    return { runId, status: "completed", currentFrame: run.current_frame, frameCount: fullGameReplayFrames.length };
   }
-  const frame = replayFrames[nextFrame];
+  const frame = fullGameReplayFrames[nextFrame];
   await ingestReplayFrame(env, runId, frame);
-  const status = nextFrame === replayFrames.length - 1 ? "completed" : run.status === "playing" ? "playing" : "paused";
+  const status = nextFrame === fullGameReplayFrames.length - 1 ? "completed" : run.status === "playing" ? "playing" : "paused";
   const now = new Date().toISOString();
   await env.NFL_DB.batch([
     env.NFL_DB.prepare(
@@ -216,7 +233,7 @@ async function actOnSimulation(env: Env, runId: string, action: string): Promise
        values (?1, ?2, ?3, 'frame_applied', ?4, ?5, ?6)`,
     ).bind(crypto.randomUUID(), runId, nextFrame, String(frame.message), JSON.stringify(frame), now),
   ]);
-  return { runId, status, currentFrame: nextFrame, frameCount: replayFrames.length, message: frame.message };
+  return { runId, status, currentFrame: nextFrame, frameCount: fullGameReplayFrames.length, message: frame.message };
 }
 
 async function updateRunStatus(env: Env, runId: string, status: string): Promise<void> {
@@ -232,27 +249,7 @@ async function audit(env: Env, userId: string, action: string, entityType: strin
   ).bind(crypto.randomUUID(), userId, action, entityType, entityId, correlationId, new Date().toISOString(), JSON.stringify(metadata)).run();
 }
 
-function team(id: string, abbreviation: string, displayName: string, color: string): Record<string, unknown> {
-  return { id, abbreviation, displayName, color, alternateColor: "ffffff", isActive: true };
+function safeJson(value: string | undefined, fallback: unknown): unknown {
+  if (!value) return fallback;
+  try { return JSON.parse(value); } catch { return fallback; }
 }
-const homeTeam = team("9001", "AUS", "Austin Armadillos", "1d4ed8");
-const awayTeam = team("9002", "BIR", "Birmingham Vulcans", "dc2626");
-function replayFrame(frameNumber: number, state: string, detail: string, period: number, clock: string, homeScore: number, awayScore: number, passStats: string[], rushStats: string[], message: string): Record<string, unknown> {
-  const eventId = "myffl-test-2026-001";
-  const athlete = { id: "99001", displayName: "Marcus Reed", position: { abbreviation: "QB" } };
-  return {
-    frameNumber, simulatedAtUtc: `2026-09-13T17:${String(frameNumber * 6).padStart(2, "0")}:00.000Z`, message,
-    scoreboard: { events: [{ id: eventId, date: "2026-09-13T17:00:00.000Z", season: { year: 2026, type: 2 }, week: { number: 1 }, status: { period, displayClock: clock, type: { state, detail, description: detail, completed: state === "post" } }, competitions: [{ competitors: [{ homeAway: "home", team: homeTeam, score: String(homeScore) }, { homeAway: "away", team: awayTeam, score: String(awayScore) }] }] }] },
-    summaries: { [eventId]: { boxscore: { players: [{ team: homeTeam, statistics: [
-      { name: "passing", labels: ["C/ATT", "YDS", "TD", "INT", "SACKS"], athletes: [{ athlete, stats: passStats }] },
-      { name: "rushing", labels: ["CAR", "YDS", "TD"], athletes: [{ athlete, stats: rushStats }] },
-    ] }] } } },
-  };
-}
-const replayFrames = [
-  replayFrame(0, "pre", "Scheduled", 0, "15:00", 0, 0, ["0/0", "0", "0", "0", "0-0"], ["0", "0", "0"], "The test game is scheduled."),
-  replayFrame(1, "in", "1st Quarter", 1, "09:42", 3, 0, ["4/6", "48", "0", "0", "1-7"], ["1", "6", "0"], "Austin opens the scoring with a field goal."),
-  replayFrame(2, "in", "2nd Quarter", 2, "04:18", 10, 7, ["11/16", "142", "1", "0", "1-7"], ["3", "19", "0"], "Marcus Reed connects for a touchdown."),
-  replayFrame(3, "in", "4th Quarter", 4, "01:12", 20, 17, ["21/30", "266", "2", "1", "2-13"], ["5", "31", "1"], "Austin protects a three-point lead late."),
-  replayFrame(4, "post", "Final", 4, "0:00", 20, 17, ["22/31", "274", "2", "1", "2-13"], ["6", "34", "1"], "The simulation has reached final status."),
-];

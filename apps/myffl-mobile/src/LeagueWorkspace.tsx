@@ -24,6 +24,7 @@ import type {
 } from "@myffl/api-contracts";
 import {
   Archive,
+  Activity,
   ArrowLeft,
   ArrowRight,
   CalendarDays,
@@ -43,6 +44,7 @@ import {
   Menu,
   Plus,
   RefreshCw,
+  Radio,
   RotateCcw,
   Save,
   Settings,
@@ -59,13 +61,29 @@ const apiBaseUrl =
   import.meta.env.VITE_API_BASE_URL ??
   (isLocalHost ? "http://localhost:8787" : "https://api.myfflapp.com");
 
-type WorkspaceView = "home" | "create" | "join" | "league";
+type WorkspaceView = "home" | "create" | "join" | "league" | "test";
 type LeagueTab = "overview" | "members" | "scoring" | "settings";
 
 interface ApiEnvelope<T> {
   ok: boolean;
   data?: T;
   error?: { code: string; message: string };
+}
+
+interface SimulationGame {
+  eventId: string; status: string; statusDetail: string; period: number; clock: string;
+  homeScore: number; awayScore: number; homeTeam: string; awayTeam: string;
+}
+interface SimulationPlay {
+  playId: string; sequenceNumber: number; driveId: string; period: number; clock: string;
+  playType: string; playText: string; statYardage: number; homeScore: number; awayScore: number;
+  scoringPlay: number; turnover: number;
+}
+interface SimulationPlayer { displayName: string; position: string; stats: Record<string, string> }
+interface SimulationDashboard {
+  scenario: { id: string; name: string; frameCount: number };
+  active: { runId: string; status: string; currentFrame: number; speedMultiplier: number } | null;
+  games: SimulationGame[]; players: SimulationPlayer[]; plays: SimulationPlay[]; currentPlay: SimulationPlay | null;
 }
 
 class LeagueApiError extends Error {
@@ -114,10 +132,19 @@ export function LeagueWorkspace({
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [testAccess, setTestAccess] = useState(false);
 
   useEffect(() => {
     loadLeagues();
+    probeTestAccess();
   }, [session.accessToken]);
+
+  async function probeTestAccess() {
+    try {
+      await leagueRequest<SimulationDashboard>("/api/admin/simulations", session.accessToken);
+      setTestAccess(true);
+    } catch { setTestAccess(false); }
+  }
 
   async function loadLeagues() {
     setBusy(true);
@@ -184,6 +211,9 @@ export function LeagueWorkspace({
           <button className={view === "join" ? "active" : ""} type="button" onClick={() => { setView("join"); setSidebarOpen(false); }}>
             <UserPlus size={19} /> Join league
           </button>
+          {testAccess && <button className={view === "test" ? "active" : ""} type="button" onClick={() => { setView("test"); setSidebarOpen(false); }}>
+            <Radio size={19} /> Live test
+          </button>}
         </nav>
         {leagues.length > 0 && (
           <div className="sidebar-leagues">
@@ -218,7 +248,7 @@ export function LeagueWorkspace({
         </header>
 
         {error && <InlineAlert message={error} onClose={() => setError("")} />}
-        {busy && view !== "create" && view !== "join" ? (
+        {busy && view !== "create" && view !== "join" && view !== "test" ? (
           <div className="workspace-loading"><LoaderCircle className="spin" size={28} /><span>Loading leagues</span></div>
         ) : view === "create" ? (
           <CreateLeagueWizard
@@ -240,6 +270,8 @@ export function LeagueWorkspace({
             onBack={() => setView("home")}
             onChanged={acceptLeague}
           />
+        ) : view === "test" ? (
+          <LiveTestView accessToken={session.accessToken} />
         ) : (
           <LeagueHome
             session={session}
@@ -252,6 +284,54 @@ export function LeagueWorkspace({
       </section>
     </main>
   );
+}
+
+function LiveTestView({ accessToken }: { accessToken: string }) {
+  const [dashboard, setDashboard] = useState<SimulationDashboard | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    async function refresh() {
+      try {
+        const next = await leagueRequest<SimulationDashboard>("/api/admin/simulations", accessToken);
+        if (active) { setDashboard(next); setError(""); }
+      } catch (requestError) {
+        if (active) setError(requestError instanceof Error ? requestError.message : "Unable to load the test game.");
+      }
+    }
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 1500);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [accessToken]);
+
+  const game = dashboard?.games[0];
+  const progress = dashboard?.active ? Math.max(0, ((dashboard.active.currentFrame + 1) / dashboard.scenario.frameCount) * 100) : 0;
+  return (
+    <div className="league-page live-test-page">
+      <header className="page-heading"><div><p className="eyebrow">Admin-controlled replay</p><h1>Live test game</h1></div><span className={`test-run-state ${dashboard?.active?.status ?? "idle"}`}>{dashboard?.active?.status ?? "idle"}</span></header>
+      {error && <InlineAlert message={error} onClose={() => setError("")} />}
+      {!dashboard?.active || !game ? (
+        <section className="test-empty"><Activity size={32}/><h2>Waiting for a test run</h2><p>Start a full game replay in myFFLAdmin, then step or play it from there.</p></section>
+      ) : <>
+        <section className="test-scoreboard">
+          <div><span className="test-team-mark away">{game.awayTeam}</span><strong>{game.awayScore}</strong></div>
+          <section><span>{game.status === "post" ? "FINAL" : game.statusDetail}</span><b>{game.clock}</b><small>Frame {dashboard.active.currentFrame + 1} of {dashboard.scenario.frameCount}</small></section>
+          <div><strong>{game.homeScore}</strong><span className="test-team-mark home">{game.homeTeam}</span></div>
+        </section>
+        <div className="test-progress"><span style={{ width: `${progress}%` }} /></div>
+        {dashboard.currentPlay && <section className={`current-play ${dashboard.currentPlay.scoringPlay ? "score" : ""}`}><p>Q{dashboard.currentPlay.period} {dashboard.currentPlay.clock} · {dashboard.currentPlay.playType}</p><strong>{dashboard.currentPlay.playText}</strong><span>{dashboard.currentPlay.awayScore} - {dashboard.currentPlay.homeScore}</span></section>}
+        <div className="test-game-grid">
+          <section className="test-data-section"><div className="section-heading"><div><p className="eyebrow">Provider box score</p><h2>Player statistics</h2></div><RefreshCw size={18}/></div><div className="test-player-list">{dashboard.players.map((player) => <div key={`${player.displayName}-${player.position}`}><span><b>{player.displayName}</b><small>{player.position}</small></span><code>{formatProviderStats(player.stats)}</code></div>)}</div></section>
+          <section className="test-data-section"><div className="section-heading"><div><p className="eyebrow">Game feed</p><h2>Play by play</h2></div><Radio size={18}/></div><div className="test-play-list">{dashboard.plays.map((play) => <div className={play.scoringPlay ? "score" : play.turnover ? "turnover" : ""} key={play.playId}><time>Q{play.period} {play.clock}</time><p>{play.playText}</p><strong>{play.awayScore}-{play.homeScore}</strong></div>)}</div></section>
+        </div>
+      </>}
+    </div>
+  );
+}
+
+function formatProviderStats(stats: Record<string, string>): string {
+  return Object.entries(stats).filter(([, value]) => value !== "0").map(([key, value]) => `${key.split(":")[1]} ${value}`).join("  ·  ") || "No recorded stats";
 }
 
 function LeagueHome({

@@ -109,6 +109,8 @@ public partial class MainWindow : Window
         {
             SimulationStatusText.Text = "No test run loaded.";
             GamesGrid.ItemsSource = null;
+            PlayersGrid.ItemsSource = null;
+            PlaysGrid.ItemsSource = null;
             return;
         }
         if (_runId is null && runs.GetArrayLength() > 0) _runId = runs[0].GetProperty("runId").GetString();
@@ -119,6 +121,21 @@ public partial class MainWindow : Window
         GamesGrid.ItemsSource = data.TryGetProperty("games", out var games) && games.ValueKind == JsonValueKind.Array
             ? JsonRows(games)
             : null;
+        PlayersGrid.ItemsSource = data.TryGetProperty("players", out var players) && players.ValueKind == JsonValueKind.Array
+            ? JsonRows(players)
+            : null;
+        PlaysGrid.ItemsSource = data.TryGetProperty("plays", out var plays) && plays.ValueKind == JsonValueKind.Array
+            ? JsonRows(plays)
+            : null;
+        var frameCount = data.TryGetProperty("scenario", out var scenario) && scenario.TryGetProperty("frameCount", out var total)
+            ? total.GetInt32() : 1;
+        var currentFrame = active.ValueKind == JsonValueKind.Object && active.TryGetProperty("currentFrame", out var frame)
+            ? frame.GetInt32() : -1;
+        SimulationProgress.Maximum = Math.Max(1, frameCount);
+        SimulationProgress.Value = Math.Max(0, currentFrame + 1);
+        CurrentPlayText.Text = data.TryGetProperty("currentPlay", out var currentPlay) && currentPlay.ValueKind == JsonValueKind.Object && currentPlay.TryGetProperty("playText", out var playText)
+            ? playText.GetString() ?? "Waiting for the next play."
+            : "Waiting for kickoff.";
     }
 
     private async Task<JsonElement> SendAsync(HttpMethod method, string path, object? body = null, bool authenticated = true)

@@ -111,7 +111,7 @@ async function routeRequest(
         service: "myffl-api",
         environment: env.ENVIRONMENT,
         status: "healthy",
-        version: "0.5.0",
+        version: "0.5.1",
         utc: new Date().toISOString(),
       } satisfies HealthResponse,
     };

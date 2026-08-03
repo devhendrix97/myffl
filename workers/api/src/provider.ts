@@ -357,6 +357,57 @@ async function ingestSummary(context: SyncContext, payload: JsonObject, eventPro
     }
   }
   if (statements.length) await context.env.NFL_DB.batch(statements);
+  await ingestPlays(context, payload, eventId);
+}
+
+async function ingestPlays(context: SyncContext, payload: JsonObject, eventId: string): Promise<void> {
+  const drives = object(payload.drives);
+  const currentDrives = isObject(drives.current) ? [drives.current] : array(drives.current);
+  const driveRows = [...array(drives.previous), ...currentDrives];
+  const unique = new Map<string, { driveId?: string; play: JsonObject }>();
+  for (const rawDrive of driveRows) {
+    const drive = object(rawDrive);
+    for (const rawPlay of array(drive.plays)) {
+      const play = object(rawPlay);
+      const id = string(play.id);
+      if (id) unique.set(id, { driveId: string(drive.id), play });
+    }
+  }
+  let statements: D1PreparedStatement[] = [];
+  for (const [playId, value] of unique) {
+    const play = value.play;
+    const participant = object(array(play.teamParticipants)[0]);
+    const providerTeamId = string(object(participant.team).id) ?? string(object(object(play.start).team).id);
+    const period = integer(object(play.period).number);
+    const clock = string(object(play.clock).displayValue) ?? "0:00";
+    statements.push(context.env.NFL_DB.prepare(
+      `insert into nfl_event_plays
+        (nfl_event_id, provider_play_id, data_scope, sequence_number, drive_id, team_id,
+         period, clock, play_type, play_text, stat_yardage, home_score, away_score,
+         scoring_play, turnover, start_json, end_json, participants_json, updated_at_utc)
+       values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+       on conflict(nfl_event_id, provider_play_id, data_scope) do update set
+        sequence_number = excluded.sequence_number, drive_id = excluded.drive_id, team_id = excluded.team_id,
+        period = excluded.period, clock = excluded.clock, play_type = excluded.play_type,
+        play_text = excluded.play_text, stat_yardage = excluded.stat_yardage,
+        home_score = excluded.home_score, away_score = excluded.away_score,
+        scoring_play = excluded.scoring_play, turnover = excluded.turnover,
+        start_json = excluded.start_json, end_json = excluded.end_json,
+        participants_json = excluded.participants_json, updated_at_utc = excluded.updated_at_utc`,
+    ).bind(eventId, playId, context.scope, integer(play.sequenceNumber), value.driveId ?? null,
+      providerTeamId ? `espn-team-${providerTeamId}` : null, period, clock,
+      string(object(play.type).text) ?? "Play", string(play.text) ?? "Play update", integer(play.statYardage),
+      integer(play.homeScore), integer(play.awayScore), play.scoringPlay === true ? 1 : 0,
+      play.isTurnover === true ? 1 : 0, JSON.stringify(play.start ?? null), JSON.stringify(play.end ?? null),
+      JSON.stringify(play.teamParticipants ?? []), context.now));
+    if (statements.length >= 75) {
+      await context.env.NFL_DB.batch(statements);
+      statements = [];
+    }
+  }
+  if (statements.length) await context.env.NFL_DB.batch(statements);
+  context.seen += unique.size;
+  context.written += unique.size;
 }
 
 async function ingestInjuries(context: SyncContext, payload: JsonObject): Promise<void> {

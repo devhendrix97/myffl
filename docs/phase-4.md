@@ -14,9 +14,11 @@ Production rows use the `production` data scope. Provider failures are recorded 
 
 ## Test Mode
 
-`myFFL Admin` exposes a deterministic Sunday game simulation with play, pause, step, reset, stop, and 1x/2x/4x pacing. Replay frames use ESPN-shaped scoreboard and summary payloads and pass through the same archive and normalization functions as live data.
+`myFFL Admin` exposes a deterministic full Sunday game simulation with play, pause, step, reset, stop, and 1x/2x/4x pacing. The 31-frame scenario progresses from scheduled kickoff through 30 plays, 10 drives, four quarters, scoring, a turnover, cumulative statistics for both teams, and final status. Replay frames use ESPN-shaped scoreboard, drive, play, scoring-play, and box-score payloads and pass through the same archive and normalization functions as live data.
 
 Every run receives a unique ID. Its normalized rows use `simulation:<run-id>` and its R2 objects use a `simulations/<run-id>` prefix. Reset only deletes rows in that run's scope; production sync never reads simulation scopes.
+
+Platform administrators also receive a **Live Test** view in the regular myFFL web app. It polls the normalized game state rather than reading replay fixtures directly, allowing myFFLAdmin to control the timeline while the normal client renders score, clock, current play, play-by-play, and player box-score changes. Fantasy lineup and league-specific point totals will attach to this same normalized feed as those product phases are implemented.
 
 ## Local Verification
 

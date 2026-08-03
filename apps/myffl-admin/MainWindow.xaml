@@ -84,8 +84,10 @@
                         <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="14" Margin="0,0,8,0"><StackPanel><TextBlock Text="Events" Foreground="{StaticResource Muted}"/><TextBlock x:Name="EventsCount" Text="-" Foreground="White" FontSize="24" FontWeight="Bold"/></StackPanel></Border>
                         <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="14"><StackPanel><TextBlock Text="Raw archives" Foreground="{StaticResource Muted}"/><TextBlock x:Name="ArchivesCount" Text="-" Foreground="White" FontSize="24" FontWeight="Bold"/></StackPanel></Border>
                     </UniformGrid>
-                    <GroupBox Header="Current Test Run"><TextBlock x:Name="SimulationStatusText" Text="No test run loaded." Foreground="{StaticResource Muted}" TextWrapping="Wrap" FontFamily="Consolas"/></GroupBox>
+                    <GroupBox Header="Current Test Run"><StackPanel><TextBlock x:Name="SimulationStatusText" Text="No test run loaded." Foreground="{StaticResource Muted}" TextWrapping="Wrap" FontFamily="Consolas"/><ProgressBar x:Name="SimulationProgress" Height="6" Minimum="0" Maximum="1" Value="0" Margin="0,12,0,8" Foreground="#2563EB"/><TextBlock x:Name="CurrentPlayText" Text="Waiting for kickoff." Foreground="White" TextWrapping="Wrap"/></StackPanel></GroupBox>
                     <GroupBox Header="Game Progress"><DataGrid x:Name="GamesGrid" AutoGenerateColumns="True" IsReadOnly="True" Background="#07101D" Foreground="White" BorderThickness="0" MinHeight="120"/></GroupBox>
+                    <GroupBox Header="Player Statistics"><DataGrid x:Name="PlayersGrid" AutoGenerateColumns="True" IsReadOnly="True" Background="#07101D" Foreground="White" BorderThickness="0" MinHeight="150"/></GroupBox>
+                    <GroupBox Header="Play Timeline"><DataGrid x:Name="PlaysGrid" AutoGenerateColumns="True" IsReadOnly="True" Background="#07101D" Foreground="White" BorderThickness="0" MinHeight="190"/></GroupBox>
                     <GroupBox Header="Provider Activity"><TextBox x:Name="ActivityText" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" MinHeight="170" FontFamily="Consolas"/></GroupBox>
                 </StackPanel>
             </ScrollViewer>
