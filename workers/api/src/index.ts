@@ -30,6 +30,7 @@ import { handleGameFeedRequest } from "./game-feed";
 import { processScoringQueue, type ScoringJob } from "./score-processing";
 import { handleDraftRequest, processExpiredDrafts } from "./draft";
 import { handleTeamRequest } from "./team";
+import { enqueueDueWaivers, handleTransactionRequest, processDueTrades, processWaiverQueue, type WaiverJob } from "./transactions";
 
 export default {
   async fetch(request, env, ctx): Promise<Response> {
@@ -94,7 +95,7 @@ export default {
     }
   },
   async scheduled(_controller, env, ctx): Promise<void> {
-    ctx.waitUntil(Promise.all([enqueueScheduledProviderWork(env), processExpiredDrafts(env)]).then(() => undefined));
+    ctx.waitUntil(Promise.all([enqueueScheduledProviderWork(env), processExpiredDrafts(env), enqueueDueWaivers(env), processDueTrades(env)]).then(() => undefined));
   },
   async queue(batch, env): Promise<void> {
     if (batch.queue === "myffl-espn-updates") {
@@ -103,6 +104,10 @@ export default {
     }
     if (batch.queue === "myffl-scoring") {
       await processScoringQueue(batch as MessageBatch<ScoringJob>, env);
+      return;
+    }
+    if (batch.queue === "myffl-waivers") {
+      await processWaiverQueue(batch as MessageBatch<WaiverJob>, env);
     }
   },
 } satisfies ExportedHandler<Env>;
@@ -120,7 +125,7 @@ async function routeRequest(
         service: "myffl-api",
         environment: env.ENVIRONMENT,
         status: "healthy",
-        version: "0.8.0",
+        version: "0.9.0",
         utc: new Date().toISOString(),
       } satisfies HealthResponse,
     };
@@ -176,6 +181,8 @@ async function routeRequest(
   if (draftResult) return draftResult;
   const teamResult = await handleTeamRequest(request, url, env, correlationId);
   if (teamResult) return teamResult;
+  const transactionResult = await handleTransactionRequest(request, url, env, correlationId);
+  if (transactionResult) return transactionResult;
   const leagueResult = await handleLeagueRequest(request, url, env, ctx, correlationId);
   if (leagueResult) return leagueResult;
   return undefined;
@@ -183,8 +190,8 @@ async function routeRequest(
 
 function phaseStatus(): PhaseStatusResponse {
   return {
-    phase: "phase-7",
-    title: "Team and Player Management",
+    phase: "phase-8",
+    title: "Transactions",
     items: [
       {
         key: "cloudflare-resources",
@@ -257,6 +264,18 @@ function phaseStatus(): PhaseStatusResponse {
         label: "Player directory and profiles",
         status: "available",
         summary: "League-aware search, ownership, injuries, watchlists, profiles, recent statistics, and comparison are available.",
+      },
+      {
+        key: "waiver-system",
+        label: "Waivers and free agents",
+        status: "available",
+        summary: "Immediate moves, ordered claims, FAAB, configurable tiebreakers, conditional drops, and queue-backed processing are available.",
+      },
+      {
+        key: "trade-system",
+        label: "Multi-asset trades",
+        status: "available",
+        summary: "Players, FAAB, and future picks support proposals, counteroffers, review, voting, expiration, validation, and atomic settlement.",
       },
     ],
   };

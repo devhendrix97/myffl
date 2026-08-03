@@ -35,7 +35,7 @@ export interface PhaseStatusItem {
 }
 
 export interface PhaseStatusResponse {
-  phase: "phase-1" | "phase-2" | "phase-3" | "phase-4" | "phase-5" | "phase-6";
+  phase: "phase-1" | "phase-2" | "phase-3" | "phase-4" | "phase-5" | "phase-6" | "phase-7" | "phase-8" | "phase-9" | "phase-10" | "phase-11";
   title: string;
   items: PhaseStatusItem[];
 }
@@ -391,6 +391,110 @@ export interface LeaguePlayerSearchItem {
   rosteredByTeamId?: string;
   rosteredByTeamName?: string;
   watched: boolean;
+}
+
+export type AcquisitionMode = "free-agent" | "waivers" | "faab";
+export type TradeReviewMode = "none" | "commissioner" | "league-vote";
+
+export interface TransactionSettingsResponse {
+  acquisitionMode: AcquisitionMode;
+  faabBudget: number;
+  minimumBid: number;
+  waiverPeriodHours: number;
+  waiverTiebreaker: "rolling-priority" | "reverse-standings" | "submission-time";
+  tradeDeadlineWeek: number;
+  tradeReviewMode: TradeReviewMode;
+  tradeReviewHours: number;
+  vetoThreshold: number;
+  draftPickTradingEnabled: boolean;
+  faabTradingEnabled: boolean;
+  revisionNumber: number;
+}
+
+export interface TransactionActivityView {
+  transactionId: string;
+  transactionType: string;
+  status: string;
+  teamName?: string;
+  summary: string;
+  failureReason?: string;
+  createdAtUtc: string;
+  processedAtUtc?: string;
+}
+
+export interface WaiverClaimView {
+  waiverClaimId: string;
+  playerId: string;
+  playerName: string;
+  position: string;
+  nflTeam?: string;
+  dropRosterPlayerId?: string;
+  dropPlayerName?: string;
+  bid: number;
+  claimOrder: number;
+  status: string;
+  failureReason?: string;
+  processesAtUtc: string;
+  revisionNumber: number;
+}
+
+export interface TradeAssetInput {
+  fromFantasyTeamId: string;
+  toFantasyTeamId: string;
+  assetType: "player" | "draft-pick" | "faab";
+  assetId?: string;
+  amount?: number;
+  draftSeasonYear?: number;
+  roundNumber?: number;
+  originalFantasyTeamId?: string;
+}
+
+export interface TradeView {
+  tradeId: string;
+  parentTradeId?: string;
+  status: string;
+  message?: string;
+  expiresAtUtc: string;
+  reviewEndsAtUtc?: string;
+  revisionNumber: number;
+  proposedByTeamId: string;
+  canRespond: boolean;
+  canCancel: boolean;
+  canReview: boolean;
+  canVote: boolean;
+  teams: Array<{ fantasyTeamId: string; teamName: string; responseStatus: string }>;
+  assets: Array<TradeAssetInput & { displayName: string }>;
+  votes: Array<{ fantasyTeamId: string; vote: "approve" | "veto" }>;
+}
+
+export interface TransactionsDashboardResponse {
+  seasonId: string;
+  teamId: string;
+  settings: TransactionSettingsResponse;
+  faabRemaining: number;
+  waiverPriority: number;
+  claimGroupRevisionNumber?: number;
+  waiverPeriod?: { waiverPeriodId: string; processesAtUtc: string; status: string };
+  claims: WaiverClaimView[];
+  trades: TradeView[];
+  activity: TransactionActivityView[];
+}
+
+export interface AddDropRequest {
+  addPlayerId: string;
+  dropRosterPlayerId?: string;
+}
+
+export interface SubmitWaiverClaimRequest extends AddDropRequest {
+  bid: number;
+}
+
+export interface ProposeTradeRequest {
+  recipientTeamIds: string[];
+  assets: TradeAssetInput[];
+  message?: string;
+  expiresAtUtc: string;
+  parentTradeId?: string;
 }
 
 export interface ScoringPresetSummary {

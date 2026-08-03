@@ -27,6 +27,9 @@ import type {
   ScoringRule,
   ScoringVersionSummary,
   TeamLineupResponse,
+  TradeAssetInput,
+  TransactionsDashboardResponse,
+  TransactionSettingsResponse,
   UpdateLeagueSettingsRequest,
 } from "@myffl/api-contracts";
 import {
@@ -77,7 +80,7 @@ const apiBaseUrl =
   (isLocalHost ? "http://localhost:8787" : "https://api.myfflapp.com");
 
 type WorkspaceView = "home" | "create" | "join" | "league" | "game";
-type LeagueTab = "overview" | "members" | "team" | "players" | "draft" | "scoring" | "settings";
+type LeagueTab = "overview" | "members" | "team" | "players" | "transactions" | "draft" | "scoring" | "settings";
 
 interface ApiEnvelope<T> {
   ok: boolean;
@@ -865,7 +868,7 @@ function LeagueDetailView({
         <span className={`league-state ${league.status}`}>{league.status}</span>
       </header>
       <div className="league-tabs" role="tablist">
-        {(["overview", "members", "team", "players", "draft", "scoring", "settings"] as LeagueTab[]).map((item) => (
+        {(["overview", "members", "team", "players", "transactions", "draft", "scoring", "settings"] as LeagueTab[]).map((item) => (
           <button role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} type="button" key={item} onClick={() => setTab(item)}>{item}</button>
         ))}
       </div>
@@ -905,6 +908,7 @@ function LeagueDetailView({
       {tab === "members" && <MembersView league={league} />}
       {tab === "team" && <TeamView league={league} accessToken={accessToken} />}
       {tab === "players" && <PlayersView league={league} accessToken={accessToken} />}
+      {tab === "transactions" && <TransactionsView league={league} accessToken={accessToken} canManage={canManage} />}
       {tab === "draft" && <DraftView league={league} accessToken={accessToken} />}
       {tab === "scoring" && <ScoringView league={league} accessToken={accessToken} canManage={canManage} />}
       {tab === "settings" && (
@@ -921,6 +925,103 @@ function LeagueDetailView({
       )}
     </div>
   );
+}
+
+function TransactionsView({ league, accessToken, canManage }: { league: LeagueDetail; accessToken: string; canManage: boolean }) {
+  const [dashboard, setDashboard] = useState<TransactionsDashboardResponse | null>(null);
+  const [players, setPlayers] = useState<LeaguePlayerSearchItem[]>([]);
+  const [lineup, setLineup] = useState<TeamLineupResponse | null>(null);
+  const [query, setQuery] = useState("");
+  const [addPlayerId, setAddPlayerId] = useState("");
+  const [dropRosterPlayerId, setDropRosterPlayerId] = useState("");
+  const [bid, setBid] = useState(0);
+  const [recipientTeamId, setRecipientTeamId] = useState("");
+  const [givePlayerId, setGivePlayerId] = useState("");
+  const [receivePlayerId, setReceivePlayerId] = useState("");
+  const [giveFaab, setGiveFaab] = useState(0);
+  const [receiveFaab, setReceiveFaab] = useState(0);
+  const [givePickRound, setGivePickRound] = useState(0);
+  const [receivePickRound, setReceivePickRound] = useState(0);
+  const [tradeMessage, setTradeMessage] = useState("");
+  const [counterTrade, setCounterTrade] = useState<{ tradeId: string; revisionNumber: number } | null>(null);
+  const [settingsDraft, setSettingsDraft] = useState<TransactionSettingsResponse | null>(null);
+  const [busy, setBusy] = useState(true);
+  const [error, setError] = useState("");
+
+  async function load() {
+    setBusy(true);
+    try {
+      const [nextDashboard, nextLineup] = await Promise.all([
+        leagueRequest<TransactionsDashboardResponse>(`/api/leagues/${league.leagueId}/transactions`, accessToken),
+        leagueRequest<TeamLineupResponse>(`/api/leagues/${league.leagueId}/team?week=1`, accessToken),
+      ]);
+      setDashboard(nextDashboard); setLineup(nextLineup); setSettingsDraft(nextDashboard.settings); setError("");
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to load transactions."); }
+    finally { setBusy(false); }
+  }
+
+  useEffect(() => { void load(); }, [accessToken, league.leagueId]);
+  useEffect(() => {
+    let active = true; const timer = window.setTimeout(async () => {
+      try { const params = new URLSearchParams({ limit: "120" }); if (query.trim()) params.set("query", query.trim()); const next = await leagueRequest<LeaguePlayerSearchItem[]>(`/api/leagues/${league.leagueId}/players?${params}`, accessToken); if (active) setPlayers(next); }
+      catch (requestError) { if (active) setError(requestError instanceof Error ? requestError.message : "Unable to search players."); }
+    }, 180); return () => { active = false; window.clearTimeout(timer); };
+  }, [accessToken, league.leagueId, query, dashboard?.activity.length]);
+
+  async function submitAcquisition() {
+    if (!dashboard || !addPlayerId) return; setBusy(true);
+    try {
+      const path = dashboard.settings.acquisitionMode === "free-agent" ? "transactions/add-drop" : "waivers";
+      setDashboard(await leagueRequest<TransactionsDashboardResponse>(`/api/leagues/${league.leagueId}/${path}`, accessToken, { method: "POST", body: { addPlayerId, dropRosterPlayerId: dropRosterPlayerId || undefined, bid } }));
+      setAddPlayerId(""); setDropRosterPlayerId(""); setBid(0);
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to submit the move."); }
+    finally { setBusy(false); }
+  }
+
+  async function reorder(claimId: string, direction: -1 | 1) {
+    if (!dashboard) return; const pending = dashboard.claims.filter((claim) => claim.status === "pending"); const index = pending.findIndex((claim) => claim.waiverClaimId === claimId); const target = index + direction; if (target < 0 || target >= pending.length) return;
+    const ids = pending.map((claim) => claim.waiverClaimId); [ids[index], ids[target]] = [ids[target], ids[index]];
+    try { setDashboard(await leagueRequest<TransactionsDashboardResponse>(`/api/leagues/${league.leagueId}/waivers/reorder`, accessToken, { method: "PUT", body: { claimIds: ids, revisionNumber: dashboard.claimGroupRevisionNumber } })); }
+    catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to reorder claims."); }
+  }
+
+  async function cancelClaim(claimId: string) { try { setDashboard(await leagueRequest<TransactionsDashboardResponse>(`/api/leagues/${league.leagueId}/waivers/${claimId}`, accessToken, { method: "DELETE" })); } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to cancel the claim."); } }
+  async function processWaivers() { try { setBusy(true); setDashboard(await leagueRequest<TransactionsDashboardResponse>(`/api/leagues/${league.leagueId}/waivers/process`, accessToken, { method: "POST", body: {} })); } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to process waivers."); } finally { setBusy(false); } }
+
+  async function proposeTrade() {
+    if (!dashboard || !recipientTeamId) return; const assets: TradeAssetInput[] = [];
+    if (givePlayerId) assets.push({ fromFantasyTeamId: dashboard.teamId, toFantasyTeamId: recipientTeamId, assetType: "player", assetId: givePlayerId });
+    if (receivePlayerId) assets.push({ fromFantasyTeamId: recipientTeamId, toFantasyTeamId: dashboard.teamId, assetType: "player", assetId: receivePlayerId });
+    if (giveFaab > 0) assets.push({ fromFantasyTeamId: dashboard.teamId, toFantasyTeamId: recipientTeamId, assetType: "faab", amount: giveFaab });
+    if (receiveFaab > 0) assets.push({ fromFantasyTeamId: recipientTeamId, toFantasyTeamId: dashboard.teamId, assetType: "faab", amount: receiveFaab });
+    if (givePickRound > 0) assets.push({ fromFantasyTeamId: dashboard.teamId, toFantasyTeamId: recipientTeamId, assetType: "draft-pick", draftSeasonYear: league.seasonYear + 1, roundNumber: givePickRound, originalFantasyTeamId: dashboard.teamId });
+    if (receivePickRound > 0) assets.push({ fromFantasyTeamId: recipientTeamId, toFantasyTeamId: dashboard.teamId, assetType: "draft-pick", draftSeasonYear: league.seasonYear + 1, roundNumber: receivePickRound, originalFantasyTeamId: recipientTeamId });
+    if (!assets.length) { setError("Add at least one player or FAAB asset to the trade."); return; }
+    const proposal = { recipientTeamIds: [recipientTeamId], assets, message: tradeMessage, expiresAtUtc: new Date(Date.now() + 3 * 86400000).toISOString() };
+    setBusy(true); try { if (counterTrade) await leagueRequest(`/api/leagues/${league.leagueId}/trades/${counterTrade.tradeId}/counter`, accessToken, { method: "POST", body: { revisionNumber: counterTrade.revisionNumber, proposal } }); else await leagueRequest(`/api/leagues/${league.leagueId}/trades`, accessToken, { method: "POST", body: proposal }); setRecipientTeamId(""); setGivePlayerId(""); setReceivePlayerId(""); setGiveFaab(0); setReceiveFaab(0); setGivePickRound(0); setReceivePickRound(0); setTradeMessage(""); setCounterTrade(null); await load(); }
+    catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to propose the trade."); setBusy(false); }
+  }
+
+  async function tradeCommand(tradeId: string, action: string, revisionNumber: number, vote?: "approve" | "veto") { try { await leagueRequest(`/api/leagues/${league.leagueId}/trades/${tradeId}/${action}`, accessToken, { method: "POST", body: { revisionNumber, vote } }); await load(); } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to update the trade."); } }
+  async function saveSettings() { if (!settingsDraft) return; try { const next = await leagueRequest<TransactionSettingsResponse>(`/api/leagues/${league.leagueId}/transactions/settings`, accessToken, { method: "PUT", body: settingsDraft }); setSettingsDraft(next); await load(); } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to save transaction settings."); } }
+
+  if (busy && !dashboard) return <div className="workspace-loading"><LoaderCircle className="spin" size={28}/><span>Loading transactions</span></div>;
+  if (!dashboard || !lineup) return <section className="team-empty">{error || "Transactions are unavailable."}</section>;
+  const availablePlayers = players.filter((player) => !player.rosteredByTeamId);
+  const otherTeams = league.members.filter((member) => member.teamId && member.teamId !== dashboard.teamId);
+  const recipientPlayers = players.filter((player) => player.rosteredByTeamId === recipientTeamId);
+  const pendingClaims = dashboard.claims.filter((claim) => claim.status === "pending");
+
+  return <div className="transactions-room">
+    {error && <InlineAlert message={error} onClose={() => setError("")}/>}
+    <header className="transactions-heading"><div><p className="eyebrow">Player movement</p><h2>Transactions</h2><span>{dashboard.settings.acquisitionMode === "faab" ? `$${dashboard.faabRemaining} FAAB` : `Waiver priority ${dashboard.waiverPriority}`}</span></div><div><small>Next processing</small><strong>{dashboard.waiverPeriod ? formatDate(dashboard.waiverPeriod.processesAtUtc) : "Open free agency"}</strong>{canManage && dashboard.settings.acquisitionMode !== "free-agent" && <button className="outline-button compact" disabled={busy} onClick={() => void processWaivers()}><RefreshCw size={14}/> Process now</button>}</div></header>
+    <div className="transactions-grid"><section className="transaction-panel"><div className="section-heading"><div><p className="eyebrow">{dashboard.settings.acquisitionMode === "free-agent" ? "Immediate move" : "Waiver claim"}</p><h3>Add a player</h3></div><UserPlus size={18}/></div><label className="transaction-search"><Search size={16}/><input placeholder="Filter player list" value={query} onChange={(event) => setQuery(event.target.value)}/></label><label>Player<select value={addPlayerId} onChange={(event) => setAddPlayerId(event.target.value)}><option value="">Choose available player</option>{availablePlayers.map((player) => <option value={player.playerId} key={player.playerId}>{player.displayName} - {player.position} {player.nflTeam}</option>)}</select></label><label>Conditional drop<select value={dropRosterPlayerId} onChange={(event) => setDropRosterPlayerId(event.target.value)}><option value="">No drop</option>{lineup.players.map((player) => <option value={player.rosterPlayerId} key={player.rosterPlayerId}>{player.displayName} - {player.position}</option>)}</select></label>{dashboard.settings.acquisitionMode === "faab" && <label>FAAB bid<input type="number" min={dashboard.settings.minimumBid} max={dashboard.faabRemaining} value={bid} onChange={(event) => setBid(Number(event.target.value))}/></label>}<button className="primary-button compact" disabled={busy || !addPlayerId} onClick={() => void submitAcquisition()}><Check size={16}/> {dashboard.settings.acquisitionMode === "free-agent" ? "Complete move" : "Submit claim"}</button></section>
+      <section className="transaction-panel waiver-list"><div className="section-heading"><div><p className="eyebrow">Priority order</p><h3>My claims</h3></div><span>{pendingClaims.length} pending</span></div>{dashboard.claims.length ? dashboard.claims.map((claim, index) => <div className={`waiver-row ${claim.status}`} key={claim.waiverClaimId}><b>{claim.claimOrder}</b><span><strong>{claim.playerName}</strong><small>{claim.position} {claim.nflTeam}{claim.dropPlayerName ? ` - drop ${claim.dropPlayerName}` : ""}</small></span>{dashboard.settings.acquisitionMode === "faab" && <em>${claim.bid}</em>}<span className="claim-status">{claim.status}</span>{claim.status === "pending" && <div><button className="icon-button" aria-label={`Move ${claim.playerName} up`} disabled={index === 0} onClick={() => void reorder(claim.waiverClaimId, -1)}><ArrowUp size={14}/></button><button className="icon-button" aria-label={`Move ${claim.playerName} down`} disabled={index === pendingClaims.length - 1} onClick={() => void reorder(claim.waiverClaimId, 1)}><ArrowDown size={14}/></button><button className="icon-button danger-icon" aria-label={`Cancel ${claim.playerName} claim`} onClick={() => void cancelClaim(claim.waiverClaimId)}><X size={14}/></button></div>}</div>) : <p className="muted-empty">No claims in this processing period.</p>}</section>
+    </div>
+    <section className="trade-workspace"><div className="section-heading"><div><p className="eyebrow">Multi-asset offers</p><h2>{counterTrade ? "Counteroffer" : "Trades"}</h2></div>{counterTrade && <button className="outline-button compact" onClick={() => setCounterTrade(null)}><X size={15}/> Cancel counter</button>}</div><div className="trade-builder"><label>Trade with<select value={recipientTeamId} onChange={(event) => { setRecipientTeamId(event.target.value); setReceivePlayerId(""); }}><option value="">Choose team</option>{otherTeams.map((member) => <option key={member.teamId} value={member.teamId}>{member.teamName}</option>)}</select></label><label>You send<select value={givePlayerId} onChange={(event) => setGivePlayerId(event.target.value)}><option value="">No player</option>{lineup.players.map((player) => <option key={player.playerId} value={player.playerId}>{player.displayName}</option>)}</select></label><label>You receive<select value={receivePlayerId} onChange={(event) => setReceivePlayerId(event.target.value)}><option value="">No player</option>{recipientPlayers.map((player) => <option key={player.playerId} value={player.playerId}>{player.displayName}</option>)}</select></label>{dashboard.settings.faabTradingEnabled && <><label>Send FAAB<input type="number" min="0" value={giveFaab} onChange={(event) => setGiveFaab(Number(event.target.value))}/></label><label>Receive FAAB<input type="number" min="0" value={receiveFaab} onChange={(event) => setReceiveFaab(Number(event.target.value))}/></label></>}{dashboard.settings.draftPickTradingEnabled && <><label>Send {league.seasonYear + 1} pick<select value={givePickRound} onChange={(event) => setGivePickRound(Number(event.target.value))}><option value="0">No pick</option>{Array.from({ length: 10 }, (_, index) => <option value={index + 1} key={index + 1}>Round {index + 1}</option>)}</select></label><label>Receive {league.seasonYear + 1} pick<select value={receivePickRound} onChange={(event) => setReceivePickRound(Number(event.target.value))}><option value="0">No pick</option>{Array.from({ length: 10 }, (_, index) => <option value={index + 1} key={index + 1}>Round {index + 1}</option>)}</select></label></>}<label className="trade-message">Message<input value={tradeMessage} maxLength={500} onChange={(event) => setTradeMessage(event.target.value)} placeholder="Optional note"/></label><button className="primary-button compact" disabled={busy || !recipientTeamId} onClick={() => void proposeTrade()}><ArrowRight size={16}/> {counterTrade ? "Send counter" : "Propose trade"}</button></div><div className="trade-list">{dashboard.trades.length ? dashboard.trades.map((trade) => <article className="trade-row" key={trade.tradeId}><header><strong>{trade.teams.map((team) => team.teamName).join(" / ")}</strong><span className={`trade-status ${trade.status}`}>{trade.status}</span></header><div>{trade.assets.map((asset, index) => <p key={`${asset.assetType}-${asset.assetId}-${index}`}><span>{trade.teams.find((team) => team.fantasyTeamId === asset.fromFantasyTeamId)?.teamName}</span><ArrowRight size={13}/><b>{asset.displayName}</b><ArrowRight size={13}/><span>{trade.teams.find((team) => team.fantasyTeamId === asset.toFantasyTeamId)?.teamName}</span></p>)}</div>{trade.message && <blockquote>{trade.message}</blockquote>}<footer>{trade.canRespond && <><button className="primary-button compact" onClick={() => void tradeCommand(trade.tradeId,"accept",trade.revisionNumber)}>Accept</button><button className="outline-button compact" onClick={() => void tradeCommand(trade.tradeId,"reject",trade.revisionNumber)}>Reject</button><button className="outline-button compact" onClick={() => { const other = trade.teams.find((team) => team.fantasyTeamId !== dashboard.teamId); setRecipientTeamId(other?.fantasyTeamId ?? ""); setCounterTrade({ tradeId: trade.tradeId, revisionNumber: trade.revisionNumber }); }}>Counter</button></>}{trade.canCancel && <button className="outline-button compact" onClick={() => void tradeCommand(trade.tradeId,"cancel",trade.revisionNumber)}>Cancel</button>}{trade.status === "under-review" && dashboard.settings.tradeReviewMode === "league-vote" && <><button className="outline-button compact" onClick={() => void tradeCommand(trade.tradeId,"vote",trade.revisionNumber,"approve")}>Approve vote</button><button className="outline-button compact" onClick={() => void tradeCommand(trade.tradeId,"vote",trade.revisionNumber,"veto")}>Veto vote</button></>}{trade.canReview && <><button className="primary-button compact" onClick={() => void tradeCommand(trade.tradeId,"approve",trade.revisionNumber)}>Approve trade</button><button className="secondary-button compact" onClick={() => void tradeCommand(trade.tradeId,"veto",trade.revisionNumber)}>Veto trade</button></>}<time>Expires {formatDate(trade.expiresAtUtc)}</time></footer></article>) : <p className="muted-empty">No trade offers yet.</p>}</div></section>
+    {canManage && settingsDraft && <section className="transaction-settings"><div className="section-heading"><div><p className="eyebrow">Commissioner controls</p><h2>Transaction settings</h2></div></div><div><label>Acquisitions<select value={settingsDraft.acquisitionMode} onChange={(event) => setSettingsDraft({ ...settingsDraft, acquisitionMode: event.target.value as TransactionSettingsResponse["acquisitionMode"] })}><option value="free-agent">Immediate free agents</option><option value="waivers">Rolling waivers</option><option value="faab">FAAB waivers</option></select></label><label>FAAB budget<input type="number" min="0" value={settingsDraft.faabBudget} onChange={(event) => setSettingsDraft({ ...settingsDraft, faabBudget: Number(event.target.value) })}/></label><label>Minimum bid<input type="number" min="0" value={settingsDraft.minimumBid} onChange={(event) => setSettingsDraft({ ...settingsDraft, minimumBid: Number(event.target.value) })}/></label><label>Waiver hours<input type="number" min="1" max="168" value={settingsDraft.waiverPeriodHours} onChange={(event) => setSettingsDraft({ ...settingsDraft, waiverPeriodHours: Number(event.target.value) })}/></label><label>Tiebreaker<select value={settingsDraft.waiverTiebreaker} onChange={(event) => setSettingsDraft({ ...settingsDraft, waiverTiebreaker: event.target.value as TransactionSettingsResponse["waiverTiebreaker"] })}><option value="rolling-priority">Rolling priority</option><option value="reverse-standings">Reverse standings</option><option value="submission-time">Submission time</option></select></label><label>Trade review<select value={settingsDraft.tradeReviewMode} onChange={(event) => setSettingsDraft({ ...settingsDraft, tradeReviewMode: event.target.value as TransactionSettingsResponse["tradeReviewMode"] })}><option value="none">No review</option><option value="commissioner">Commissioner</option><option value="league-vote">League vote</option></select></label><label>Review hours<input type="number" min="0" max="168" value={settingsDraft.tradeReviewHours} onChange={(event) => setSettingsDraft({ ...settingsDraft, tradeReviewHours: Number(event.target.value) })}/></label><label>Veto threshold<input type="number" min="1" value={settingsDraft.vetoThreshold} onChange={(event) => setSettingsDraft({ ...settingsDraft, vetoThreshold: Number(event.target.value) })}/></label><label>Deadline week<input type="number" min="1" max="18" value={settingsDraft.tradeDeadlineWeek} onChange={(event) => setSettingsDraft({ ...settingsDraft, tradeDeadlineWeek: Number(event.target.value) })}/></label><label className="transaction-toggle"><input type="checkbox" checked={settingsDraft.draftPickTradingEnabled} onChange={(event) => setSettingsDraft({ ...settingsDraft, draftPickTradingEnabled: event.target.checked })}/> Draft-pick trading</label><label className="transaction-toggle"><input type="checkbox" checked={settingsDraft.faabTradingEnabled} onChange={(event) => setSettingsDraft({ ...settingsDraft, faabTradingEnabled: event.target.checked })}/> FAAB trading</label><button className="primary-button compact" onClick={() => void saveSettings()}><Save size={16}/> Save settings</button></div></section>}
+    <section className="transaction-activity"><div className="section-heading"><div><p className="eyebrow">Official record</p><h2>Recent activity</h2></div></div>{dashboard.activity.map((item) => <div key={item.transactionId}><span className={`transaction-result ${item.status}`}/><p><strong>{item.teamName ?? "League"}</strong> {item.summary}<small>{item.failureReason ?? formatDate(item.processedAtUtc ?? item.createdAtUtc)}</small></p></div>)}</section>
+  </div>;
 }
 
 function PlayersView({ league, accessToken }: { league: LeagueDetail; accessToken: string }) {

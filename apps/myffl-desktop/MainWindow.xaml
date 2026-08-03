@@ -102,8 +102,8 @@
                     </Border>
                     <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource PanelBorderBrush}" BorderThickness="1" Padding="18">
                         <StackPanel>
-                            <TextBlock Text="Team Management" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
-                            <TextBlock Text="Lineups, locks, profiles, and optimizer" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
+                            <TextBlock Text="Transactions" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
+                            <TextBlock Text="Waivers, FAAB, trades, and draft picks" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
                             <TextBlock Text="Available" Foreground="#22C55E" FontWeight="Bold" Margin="0,18,0,0"/>
                         </StackPanel>
                     </Border>
@@ -120,7 +120,8 @@
                             <TextBlock Text="- Custom scoring editor: available" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
                             <TextBlock Text="- ESPN synchronization and scoring: available" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
                             <TextBlock Text="- Live draft and roster acquisition: available" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
-                            <TextBlock Text="- Team, lineup, and player management: available" Foreground="{StaticResource MutedTextBrush}"/>
+                            <TextBlock Text="- Team, lineup, and player management: available" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
+                            <TextBlock Text="- Waivers, FAAB, and multi-asset trades: available" Foreground="{StaticResource MutedTextBrush}"/>
                         </StackPanel>
                     </StackPanel>
                 </Border>
