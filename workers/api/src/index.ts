@@ -26,6 +26,7 @@ import { handleLeagueRequest } from "./league";
 import { handleScoringRequest } from "./scoring";
 import { handleAdminRequest } from "./admin";
 import { enqueueScheduledProviderWork, processProviderQueue, type ProviderJob } from "./provider";
+import { handleGameFeedRequest } from "./game-feed";
 
 export default {
   async fetch(request, env, ctx): Promise<Response> {
@@ -111,7 +112,7 @@ async function routeRequest(
         service: "myffl-api",
         environment: env.ENVIRONMENT,
         status: "healthy",
-        version: "0.5.1",
+        version: "0.5.2",
         utc: new Date().toISOString(),
       } satisfies HealthResponse,
     };
@@ -159,6 +160,8 @@ async function routeRequest(
   }
   const adminResult = await handleAdminRequest(request, url, env, ctx, correlationId);
   if (adminResult) return adminResult;
+  const gameFeedResult = await handleGameFeedRequest(request, url, env);
+  if (gameFeedResult) return gameFeedResult;
   const scoringResult = await handleScoringRequest(request, url, env, ctx, correlationId);
   if (scoringResult) return scoringResult;
   const leagueResult = await handleLeagueRequest(request, url, env, ctx, correlationId);

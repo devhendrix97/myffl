@@ -3,6 +3,7 @@ import { authenticate } from "./auth";
 import { ApiException, readJson } from "./http";
 import { ingestReplayFrame, runProviderJob, type ProviderJob } from "./provider";
 import { fullGameReplayFrames, replayScenarioId, replayScenarioName } from "./replay-scenario";
+import { getProviderRuntime } from "./game-feed";
 
 interface AdminPrincipal { userId: string; role: string }
 interface SimulationRow {
@@ -35,6 +36,15 @@ export async function handleAdminRequest(
     ctx.waitUntil(runProviderJob(env, job));
     await audit(env, admin.userId, "provider.sync.requested", "provider", body.resource ?? "scoreboard", correlationId, { job });
     return { data: { accepted: true, job }, status: 202 };
+  }
+  if (request.method === "GET" && url.pathname === "/api/admin/provider/runtime") {
+    return { data: await getProviderRuntime(env) };
+  }
+  if (request.method === "POST" && url.pathname === "/api/admin/provider/runtime") {
+    const body = await readJson<{ mode?: string; runId?: string }>(request);
+    const runtime = await setProviderRuntime(env, admin.userId, body.mode, body.runId);
+    await audit(env, admin.userId, "provider.runtime.changed", "provider_runtime", "nfl", correlationId, runtime);
+    return { data: runtime };
   }
   if (request.method === "GET" && url.pathname === "/api/admin/simulations") {
     return { data: await simulationDashboard(env) };
@@ -71,7 +81,7 @@ function providerJob(resource: string | undefined): ProviderJob {
 }
 
 async function providerDashboard(env: Env): Promise<unknown> {
-  const [states, runs, counts] = await Promise.all([
+  const [states, runs, counts, runtime] = await Promise.all([
     env.NFL_DB.prepare(
       `select provider, resource, data_scope as dataScope, last_success_at_utc as lastSuccessAtUtc,
         last_attempt_at_utc as lastAttemptAtUtc, last_status as lastStatus,
@@ -92,8 +102,30 @@ async function providerDashboard(env: Env): Promise<unknown> {
         (select count(*) from nfl_player_injuries where data_scope = 'production') as injuries,
         (select count(*) from provider_raw_archives) as archives`,
     ).first(),
+    getProviderRuntime(env),
   ]);
-  return { provider: "espn", parserVersion: "espn-nfl-1.0.0", counts, states: states.results, recentRuns: runs.results };
+  return { provider: "espn", parserVersion: "espn-nfl-1.0.0", runtime, counts, states: states.results, recentRuns: runs.results };
+}
+
+async function setProviderRuntime(env: Env, userId: string, requestedMode?: string, requestedRunId?: string): Promise<unknown> {
+  if (requestedMode !== "live" && requestedMode !== "replay") {
+    throw new ApiException(400, "invalid_provider_mode", "Provider mode must be live or replay.");
+  }
+  let runId: string | null = null;
+  if (requestedMode === "replay") {
+    if (!requestedRunId) throw new ApiException(400, "simulation_run_required", "Start or select a simulation run first.");
+    const run = await env.NFL_DB.prepare(
+      `select simulation_run_id from simulation_runs where simulation_run_id = ?1 and status != 'stopped'`,
+    ).bind(requestedRunId).first<{ simulation_run_id: string }>();
+    if (!run) throw new ApiException(409, "simulation_run_unavailable", "The selected simulation run is not available.");
+    runId = run.simulation_run_id;
+  }
+  await env.NFL_DB.prepare(
+    `update provider_runtime_mode set mode = ?1, active_simulation_run_id = ?2,
+      revision_number = revision_number + 1, updated_by_user_id = ?3, updated_at_utc = ?4
+     where sport_key = 'nfl'`,
+  ).bind(requestedMode, runId, userId, new Date().toISOString()).run();
+  return await getProviderRuntime(env);
 }
 
 async function simulationDashboard(env: Env): Promise<unknown> {

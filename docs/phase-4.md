@@ -18,7 +18,9 @@ Production rows use the `production` data scope. Provider failures are recorded 
 
 Every run receives a unique ID. Its normalized rows use `simulation:<run-id>` and its R2 objects use a `simulations/<run-id>` prefix. Reset only deletes rows in that run's scope; production sync never reads simulation scopes.
 
-Platform administrators also receive a **Live Test** view in the regular myFFL web app. It polls the normalized game state rather than reading replay fixtures directly, allowing myFFLAdmin to control the timeline while the normal client renders score, clock, current play, play-by-play, and player box-score changes. Fantasy lineup and league-specific point totals will attach to this same normalized feed as those product phases are implemented.
+The regular myFFL **Game Center** always reads `GET /api/games/current`. That endpoint resolves the active provider scope on the server and returns one normalized contract; the client does not branch on live versus replay data. myFFLAdmin is the only place that can switch the NFL runtime between the `production` ESPN scope and one isolated `simulation:<run-id>` scope. Switching back to live is immediate and does not copy, delete, or overwrite either dataset.
+
+Fantasy lineup and league-specific point totals will attach to this same normalized feed as those product phases are implemented.
 
 ## Local Verification
 
@@ -35,7 +37,9 @@ Run the desktop utility from Visual Studio by selecting `apps/myffl-admin/MyFFL.
 
 - `GET /api/admin/provider/dashboard`
 - `POST /api/admin/provider/sync`
+- `GET|POST /api/admin/provider/runtime`
 - `GET|POST /api/admin/simulations`
 - `POST /api/admin/simulations/{runId}/{play|pause|step|reset|stop}`
+- `GET /api/games/current`
 
 All endpoints require an active native session and platform-admin allowlist entry.

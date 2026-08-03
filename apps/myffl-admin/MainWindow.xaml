@@ -62,6 +62,8 @@
                 </GroupBox>
                 <GroupBox Header="Test Mode">
                     <StackPanel x:Name="SimulationControls" IsEnabled="False">
+                        <CheckBox x:Name="ReplayModeToggle" Content="Route Game Center to replay data" Foreground="White" Margin="0,0,0,12" Checked="ReplayMode_Checked" Unchecked="ReplayMode_Unchecked"/>
+                        <TextBlock x:Name="ProviderModeText" Text="Live ESPN data active" Foreground="#72D49A" Margin="0,0,0,12"/>
                         <DockPanel Margin="0,0,0,10"><TextBlock Text="Speed" Foreground="{StaticResource Muted}"/><ComboBox x:Name="SpeedCombo" DockPanel.Dock="Right" Width="90" SelectedIndex="0"><ComboBoxItem Content="1x" Tag="1"/><ComboBoxItem Content="2x" Tag="2"/><ComboBoxItem Content="4x" Tag="4"/></ComboBox></DockPanel>
                         <Button Content="Start new test run" Click="CreateSimulation_Click"/>
                         <WrapPanel>

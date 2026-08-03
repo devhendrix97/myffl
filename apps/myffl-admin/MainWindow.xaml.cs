@@ -15,6 +15,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _playTimer;
     private string? _accessToken;
     private string? _runId;
+    private bool _loadingRuntime;
 
     public MainWindow()
     {
@@ -61,6 +62,7 @@ public partial class MainWindow : Window
             var speed = int.Parse(((ComboBoxItem)SpeedCombo.SelectedItem).Tag.ToString()!);
             var result = await SendAsync(HttpMethod.Post, "/api/admin/simulations", new { speedMultiplier = speed });
             _runId = result.GetProperty("runId").GetString();
+            await SetProviderModeAsync("replay");
             await RefreshSimulationAsync();
         });
     }
@@ -99,6 +101,46 @@ public partial class MainWindow : Window
         TeamsCount.Text = GetCount(counts, "teams"); PlayersCount.Text = GetCount(counts, "players");
         EventsCount.Text = GetCount(counts, "events"); ArchivesCount.Text = GetCount(counts, "archives");
         ActivityText.Text = JsonSerializer.Serialize(data.GetProperty("recentRuns"), new JsonSerializerOptions { WriteIndented = true });
+        if (data.TryGetProperty("runtime", out var runtime)) ApplyRuntime(runtime);
+    }
+
+    private async void ReplayMode_Checked(object sender, RoutedEventArgs e)
+    {
+        if (_loadingRuntime) return;
+        await RunUiAction(async () =>
+        {
+            if (_runId is null)
+            {
+                _loadingRuntime = true;
+                ReplayModeToggle.IsChecked = false;
+                _loadingRuntime = false;
+                throw new InvalidOperationException("Start a test run before enabling replay data.");
+            }
+            await SetProviderModeAsync("replay");
+        });
+    }
+
+    private async void ReplayMode_Unchecked(object sender, RoutedEventArgs e)
+    {
+        if (_loadingRuntime || _accessToken is null) return;
+        await RunUiAction(async () => await SetProviderModeAsync("live"));
+    }
+
+    private async Task SetProviderModeAsync(string mode)
+    {
+        var runtime = await SendAsync(HttpMethod.Post, "/api/admin/provider/runtime", new { mode, runId = mode == "replay" ? _runId : null });
+        ApplyRuntime(runtime);
+    }
+
+    private void ApplyRuntime(JsonElement runtime)
+    {
+        var mode = runtime.TryGetProperty("mode", out var modeValue) ? modeValue.GetString() : "live";
+        if (runtime.TryGetProperty("runId", out var runValue) && runValue.ValueKind == JsonValueKind.String) _runId = runValue.GetString();
+        _loadingRuntime = true;
+        ReplayModeToggle.IsChecked = mode == "replay";
+        _loadingRuntime = false;
+        ProviderModeText.Text = mode == "replay" ? "Replay data active" : "Live ESPN data active";
+        ProviderModeText.Foreground = new SolidColorBrush(mode == "replay" ? Color.FromRgb(242, 199, 107) : Color.FromRgb(114, 212, 154));
     }
 
     private async Task RefreshSimulationAsync()
