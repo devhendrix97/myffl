@@ -1,0 +1,251 @@
+import type { HandlerResult } from "./auth";
+import { authenticate } from "./auth";
+import { ApiException, readJson } from "./http";
+import { ingestReplayFrame, runProviderJob, type ProviderJob } from "./provider";
+
+interface AdminPrincipal { userId: string; role: string }
+interface SimulationRow {
+  simulation_run_id: string;
+  simulation_scenario_id: string;
+  status: "ready" | "playing" | "paused" | "completed" | "stopped";
+  speed_multiplier: number;
+  current_frame: number;
+  simulated_at_utc: string | null;
+  created_at_utc: string;
+  updated_at_utc: string;
+}
+
+export async function handleAdminRequest(
+  request: Request,
+  url: URL,
+  env: Env,
+  ctx: ExecutionContext,
+  correlationId: string,
+): Promise<HandlerResult<unknown> | undefined> {
+  if (!url.pathname.startsWith("/api/admin/")) return undefined;
+  const admin = await requirePlatformAdmin(request, env);
+
+  if (request.method === "GET" && url.pathname === "/api/admin/provider/dashboard") {
+    return { data: await providerDashboard(env) };
+  }
+  if (request.method === "POST" && url.pathname === "/api/admin/provider/sync") {
+    const body = await readJson<{ resource?: string }>(request);
+    const job = providerJob(body.resource);
+    ctx.waitUntil(runProviderJob(env, job));
+    await audit(env, admin.userId, "provider.sync.requested", "provider", body.resource ?? "scoreboard", correlationId, { job });
+    return { data: { accepted: true, job }, status: 202 };
+  }
+  if (request.method === "GET" && url.pathname === "/api/admin/simulations") {
+    return { data: await simulationDashboard(env) };
+  }
+  if (request.method === "POST" && url.pathname === "/api/admin/simulations") {
+    const body = await readJson<{ speedMultiplier?: number }>(request);
+    return { data: await createSimulation(env, admin.userId, body.speedMultiplier), status: 201 };
+  }
+  const match = url.pathname.match(/^\/api\/admin\/simulations\/([^/]+)\/(play|pause|step|reset|stop)$/);
+  if (request.method === "POST" && match) {
+    const runId = decodeURIComponent(match[1]);
+    const action = match[2];
+    const result = await actOnSimulation(env, runId, action);
+    await audit(env, admin.userId, `simulation.${action}`, "simulation_run", runId, correlationId, result);
+    return { data: result };
+  }
+  return undefined;
+}
+
+async function requirePlatformAdmin(request: Request, env: Env): Promise<AdminPrincipal> {
+  const principal = await authenticate(request, env);
+  const admin = await env.CORE_DB.prepare(
+    `select admin_role from platform_admins where user_id = ?1 and active = 1 limit 1`,
+  ).bind(principal.userId).first<{ admin_role: string }>();
+  if (!admin) throw new ApiException(403, "platform_admin_required", "Platform administrator access is required.");
+  return { userId: principal.userId, role: admin.admin_role };
+}
+
+function providerJob(resource: string | undefined): ProviderJob {
+  if (!resource || resource === "scoreboard") return { type: "sync-scoreboard" };
+  if (resource === "teams") return { type: "sync-teams" };
+  if (resource === "injuries") return { type: "sync-injuries" };
+  throw new ApiException(400, "invalid_provider_resource", "Resource must be scoreboard, teams, or injuries.");
+}
+
+async function providerDashboard(env: Env): Promise<unknown> {
+  const [states, runs, counts] = await Promise.all([
+    env.NFL_DB.prepare(
+      `select provider, resource, data_scope as dataScope, last_success_at_utc as lastSuccessAtUtc,
+        last_attempt_at_utc as lastAttemptAtUtc, last_status as lastStatus,
+        last_run_id as lastRunId, last_error as lastError
+       from provider_sync_state where data_scope = 'production' order by resource`,
+    ).all(),
+    env.NFL_DB.prepare(
+      `select provider_sync_run_id as runId, resource, data_scope as dataScope, status,
+        records_seen as recordsSeen, records_written as recordsWritten, warning_count as warningCount,
+        error_message as errorMessage, started_at_utc as startedAtUtc, completed_at_utc as completedAtUtc
+       from provider_sync_runs order by started_at_utc desc limit 20`,
+    ).all(),
+    env.NFL_DB.prepare(
+      `select
+        (select count(*) from nfl_teams) as teams,
+        (select count(*) from nfl_players) as players,
+        (select count(*) from nfl_events) as events,
+        (select count(*) from nfl_player_injuries where data_scope = 'production') as injuries,
+        (select count(*) from provider_raw_archives) as archives`,
+    ).first(),
+  ]);
+  return { provider: "espn", parserVersion: "espn-nfl-1.0.0", counts, states: states.results, recentRuns: runs.results };
+}
+
+async function simulationDashboard(env: Env): Promise<unknown> {
+  const runs = await env.NFL_DB.prepare(
+    `select simulation_run_id as runId, simulation_scenario_id as scenarioId, status,
+      speed_multiplier as speedMultiplier, current_frame as currentFrame,
+      simulated_at_utc as simulatedAtUtc, created_at_utc as createdAtUtc, updated_at_utc as updatedAtUtc
+     from simulation_runs order by created_at_utc desc limit 10`,
+  ).all();
+  const active = runs.results[0] as Record<string, unknown> | undefined;
+  let events: unknown[] = [];
+  let games: unknown[] = [];
+  let players: unknown[] = [];
+  if (active?.runId) {
+    const scope = `simulation:${active.runId}`;
+    const [eventRows, gameRows, playerRows] = await Promise.all([
+      env.NFL_DB.prepare(
+        `select frame_number as frameNumber, event_type as eventType, message, created_at_utc as createdAtUtc
+         from simulation_event_log where simulation_run_id = ?1 order by created_at_utc desc limit 20`,
+      ).bind(active.runId).all(),
+      env.NFL_DB.prepare(
+        `select events.provider_event_id as eventId, snapshots.status, snapshots.status_detail as statusDetail,
+          snapshots.period, snapshots.clock, snapshots.home_score as homeScore, snapshots.away_score as awayScore,
+          home.abbreviation as homeTeam, away.abbreviation as awayTeam
+         from nfl_event_snapshots snapshots
+         join nfl_events events on events.nfl_event_id = snapshots.nfl_event_id
+         left join nfl_team_snapshots home on home.nfl_team_id = snapshots.home_team_id and home.data_scope = snapshots.data_scope
+         left join nfl_team_snapshots away on away.nfl_team_id = snapshots.away_team_id and away.data_scope = snapshots.data_scope
+         where snapshots.data_scope = ?1 order by snapshots.updated_at_utc desc`,
+      ).bind(scope).all(),
+      env.NFL_DB.prepare(
+        `select players.display_name as displayName, stats.position, stats.stats_json as statsJson
+         from nfl_player_game_stats stats join nfl_players players on players.nfl_player_id = stats.nfl_player_id
+         where stats.data_scope = ?1 order by players.display_name limit 30`,
+      ).bind(scope).all(),
+    ]);
+    events = eventRows.results; games = gameRows.results; players = playerRows.results;
+  }
+  return { scenario: { id: "demo-live-game", name: "Sunday Game Simulation", frameCount: replayFrames.length }, runs: runs.results, active, events, games, players };
+}
+
+async function createSimulation(env: Env, userId: string, requestedSpeed?: number): Promise<unknown> {
+  const speed = [1, 2, 4].includes(requestedSpeed ?? 1) ? requestedSpeed ?? 1 : 1;
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  await env.NFL_DB.batch([
+    env.NFL_DB.prepare(
+      `insert into simulation_scenarios
+        (simulation_scenario_id, name, description, frame_count, fixture_prefix, created_at_utc)
+       values ('demo-live-game', 'Sunday Game Simulation', 'Deterministic ESPN-shaped game progression.', ?1,
+        'built-in/demo-live-game', ?2)
+       on conflict(simulation_scenario_id) do update set frame_count = excluded.frame_count`,
+    ).bind(replayFrames.length, now),
+    env.NFL_DB.prepare(
+      `insert into simulation_runs
+        (simulation_run_id, simulation_scenario_id, created_by_user_id, status,
+         speed_multiplier, current_frame, created_at_utc, updated_at_utc)
+       values (?1, 'demo-live-game', ?2, 'ready', ?3, -1, ?4, ?4)`,
+    ).bind(id, userId, speed, now),
+  ]);
+  return { runId: id, status: "ready", speedMultiplier: speed, currentFrame: -1, frameCount: replayFrames.length };
+}
+
+async function actOnSimulation(env: Env, runId: string, action: string): Promise<Record<string, unknown>> {
+  const run = await env.NFL_DB.prepare(
+    `select simulation_run_id, simulation_scenario_id, status, speed_multiplier, current_frame,
+      simulated_at_utc, created_at_utc, updated_at_utc from simulation_runs where simulation_run_id = ?1`,
+  ).bind(runId).first<SimulationRow>();
+  if (!run) throw new ApiException(404, "simulation_not_found", "The simulation run does not exist.");
+  if (action === "play" || action === "pause") {
+    const status = action === "play" ? "playing" : "paused";
+    await updateRunStatus(env, runId, status);
+    return { runId, status, currentFrame: run.current_frame, frameCount: replayFrames.length };
+  }
+  if (action === "stop") {
+    const now = new Date().toISOString();
+    await env.NFL_DB.prepare(
+      `update simulation_runs set status = 'stopped', stopped_at_utc = ?2, updated_at_utc = ?2 where simulation_run_id = ?1`,
+    ).bind(runId, now).run();
+    return { runId, status: "stopped", currentFrame: run.current_frame, frameCount: replayFrames.length };
+  }
+  if (action === "reset") {
+    const scope = `simulation:${runId}`;
+    await env.NFL_DB.batch([
+      env.NFL_DB.prepare(`delete from nfl_player_game_stats where data_scope = ?1`).bind(scope),
+      env.NFL_DB.prepare(`delete from nfl_event_snapshots where data_scope = ?1`).bind(scope),
+      env.NFL_DB.prepare(`delete from nfl_team_snapshots where data_scope = ?1`).bind(scope),
+      env.NFL_DB.prepare(`delete from simulation_event_log where simulation_run_id = ?1`).bind(runId),
+      env.NFL_DB.prepare(
+        `update simulation_runs set status = 'ready', current_frame = -1, simulated_at_utc = null,
+          updated_at_utc = ?2, stopped_at_utc = null where simulation_run_id = ?1`,
+      ).bind(runId, new Date().toISOString()),
+    ]);
+    return { runId, status: "ready", currentFrame: -1, frameCount: replayFrames.length };
+  }
+  if (run.status === "stopped") throw new ApiException(409, "simulation_stopped", "Reset a stopped simulation before stepping it.");
+  const nextFrame = run.current_frame + 1;
+  if (nextFrame >= replayFrames.length) {
+    await updateRunStatus(env, runId, "completed");
+    return { runId, status: "completed", currentFrame: run.current_frame, frameCount: replayFrames.length };
+  }
+  const frame = replayFrames[nextFrame];
+  await ingestReplayFrame(env, runId, frame);
+  const status = nextFrame === replayFrames.length - 1 ? "completed" : run.status === "playing" ? "playing" : "paused";
+  const now = new Date().toISOString();
+  await env.NFL_DB.batch([
+    env.NFL_DB.prepare(
+      `update simulation_runs set status = ?2, current_frame = ?3, simulated_at_utc = ?4,
+        updated_at_utc = ?5 where simulation_run_id = ?1`,
+    ).bind(runId, status, nextFrame, String(frame.simulatedAtUtc), now),
+    env.NFL_DB.prepare(
+      `insert into simulation_event_log
+        (simulation_event_id, simulation_run_id, frame_number, event_type, message, payload_json, created_at_utc)
+       values (?1, ?2, ?3, 'frame_applied', ?4, ?5, ?6)`,
+    ).bind(crypto.randomUUID(), runId, nextFrame, String(frame.message), JSON.stringify(frame), now),
+  ]);
+  return { runId, status, currentFrame: nextFrame, frameCount: replayFrames.length, message: frame.message };
+}
+
+async function updateRunStatus(env: Env, runId: string, status: string): Promise<void> {
+  await env.NFL_DB.prepare(`update simulation_runs set status = ?2, updated_at_utc = ?3 where simulation_run_id = ?1`)
+    .bind(runId, status, new Date().toISOString()).run();
+}
+
+async function audit(env: Env, userId: string, action: string, entityType: string, entityId: string, correlationId: string, metadata: unknown): Promise<void> {
+  await env.CORE_DB.prepare(
+    `insert into audit_events
+      (audit_event_id, actor_user_id, action, entity_type, entity_id, correlation_id, created_at_utc, metadata_json)
+     values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+  ).bind(crypto.randomUUID(), userId, action, entityType, entityId, correlationId, new Date().toISOString(), JSON.stringify(metadata)).run();
+}
+
+function team(id: string, abbreviation: string, displayName: string, color: string): Record<string, unknown> {
+  return { id, abbreviation, displayName, color, alternateColor: "ffffff", isActive: true };
+}
+const homeTeam = team("9001", "AUS", "Austin Armadillos", "1d4ed8");
+const awayTeam = team("9002", "BIR", "Birmingham Vulcans", "dc2626");
+function replayFrame(frameNumber: number, state: string, detail: string, period: number, clock: string, homeScore: number, awayScore: number, passStats: string[], rushStats: string[], message: string): Record<string, unknown> {
+  const eventId = "myffl-test-2026-001";
+  const athlete = { id: "99001", displayName: "Marcus Reed", position: { abbreviation: "QB" } };
+  return {
+    frameNumber, simulatedAtUtc: `2026-09-13T17:${String(frameNumber * 6).padStart(2, "0")}:00.000Z`, message,
+    scoreboard: { events: [{ id: eventId, date: "2026-09-13T17:00:00.000Z", season: { year: 2026, type: 2 }, week: { number: 1 }, status: { period, displayClock: clock, type: { state, detail, description: detail, completed: state === "post" } }, competitions: [{ competitors: [{ homeAway: "home", team: homeTeam, score: String(homeScore) }, { homeAway: "away", team: awayTeam, score: String(awayScore) }] }] }] },
+    summaries: { [eventId]: { boxscore: { players: [{ team: homeTeam, statistics: [
+      { name: "passing", labels: ["C/ATT", "YDS", "TD", "INT", "SACKS"], athletes: [{ athlete, stats: passStats }] },
+      { name: "rushing", labels: ["CAR", "YDS", "TD"], athletes: [{ athlete, stats: rushStats }] },
+    ] }] } } },
+  };
+}
+const replayFrames = [
+  replayFrame(0, "pre", "Scheduled", 0, "15:00", 0, 0, ["0/0", "0", "0", "0", "0-0"], ["0", "0", "0"], "The test game is scheduled."),
+  replayFrame(1, "in", "1st Quarter", 1, "09:42", 3, 0, ["4/6", "48", "0", "0", "1-7"], ["1", "6", "0"], "Austin opens the scoring with a field goal."),
+  replayFrame(2, "in", "2nd Quarter", 2, "04:18", 10, 7, ["11/16", "142", "1", "0", "1-7"], ["3", "19", "0"], "Marcus Reed connects for a touchdown."),
+  replayFrame(3, "in", "4th Quarter", 4, "01:12", 20, 17, ["21/30", "266", "2", "1", "2-13"], ["5", "31", "1"], "Austin protects a three-point lead late."),
+  replayFrame(4, "post", "Final", 4, "0:00", 20, 17, ["22/31", "274", "2", "1", "2-13"], ["6", "34", "1"], "The simulation has reached final status."),
+];

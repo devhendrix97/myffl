@@ -1,23 +1,142 @@
-﻿using System.Text;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
-using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
+using System.Windows.Threading;
 
 namespace MyFFL.Admin;
 
-/// <summary>
-/// Interaction logic for MainWindow.xaml
-/// </summary>
 public partial class MainWindow : Window
 {
+    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
+    private readonly DispatcherTimer _playTimer;
+    private string? _accessToken;
+    private string? _runId;
+
     public MainWindow()
     {
         InitializeComponent();
+        _playTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        _playTimer.Tick += async (_, _) => await StepAndRefreshAsync();
     }
+
+    private async void SignIn_Click(object sender, RoutedEventArgs e)
+    {
+        await RunUiAction(async () =>
+        {
+            var result = await SendAsync(HttpMethod.Post, "/auth/login", new
+            {
+                email = EmailTextBox.Text.Trim(), password = PasswordInput.Password, clientType = "native"
+            }, authenticated: false);
+            _accessToken = result.GetProperty("accessToken").GetString();
+            _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
+            ConnectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(34, 197, 94));
+            ConnectionText.Text = result.GetProperty("displayName").GetString() ?? "Administrator";
+            ProviderControls.IsEnabled = SimulationControls.IsEnabled = true;
+            await RefreshAllAsync();
+        });
+    }
+
+    private async void Sync_Click(object sender, RoutedEventArgs e)
+    {
+        var resource = (sender as Button)?.Tag?.ToString() ?? "scoreboard";
+        await RunUiAction(async () =>
+        {
+            await SendAsync(HttpMethod.Post, "/api/admin/provider/sync", new { resource });
+            StatusText.Text = $"{resource} sync accepted.";
+            await Task.Delay(1500);
+            await RefreshProviderAsync();
+        });
+    }
+
+    private async void Refresh_Click(object sender, RoutedEventArgs e) => await RunUiAction(RefreshAllAsync);
+
+    private async void CreateSimulation_Click(object sender, RoutedEventArgs e)
+    {
+        await RunUiAction(async () =>
+        {
+            var speed = int.Parse(((ComboBoxItem)SpeedCombo.SelectedItem).Tag.ToString()!);
+            var result = await SendAsync(HttpMethod.Post, "/api/admin/simulations", new { speedMultiplier = speed });
+            _runId = result.GetProperty("runId").GetString();
+            await RefreshSimulationAsync();
+        });
+    }
+
+    private async void SimulationAction_Click(object sender, RoutedEventArgs e)
+    {
+        if (_runId is null) { StatusText.Text = "Start a test run first."; return; }
+        var action = (sender as Button)?.Tag?.ToString() ?? "pause";
+        await RunUiAction(async () =>
+        {
+            await SendAsync(HttpMethod.Post, $"/api/admin/simulations/{_runId}/{action}", new { });
+            if (action == "play") _playTimer.Start();
+            if (action is "pause" or "stop" or "reset") _playTimer.Stop();
+            await RefreshSimulationAsync();
+        });
+    }
+
+    private async Task StepAndRefreshAsync()
+    {
+        if (_runId is null) return;
+        try
+        {
+            var result = await SendAsync(HttpMethod.Post, $"/api/admin/simulations/{_runId}/step", new { });
+            if (result.GetProperty("status").GetString() == "completed") _playTimer.Stop();
+            await RefreshSimulationAsync();
+        }
+        catch (Exception ex) { _playTimer.Stop(); StatusText.Text = ex.Message; }
+    }
+
+    private async Task RefreshAllAsync() { await RefreshProviderAsync(); await RefreshSimulationAsync(); }
+
+    private async Task RefreshProviderAsync()
+    {
+        var data = await SendAsync(HttpMethod.Get, "/api/admin/provider/dashboard");
+        var counts = data.GetProperty("counts");
+        TeamsCount.Text = GetCount(counts, "teams"); PlayersCount.Text = GetCount(counts, "players");
+        EventsCount.Text = GetCount(counts, "events"); ArchivesCount.Text = GetCount(counts, "archives");
+        ActivityText.Text = JsonSerializer.Serialize(data.GetProperty("recentRuns"), new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private async Task RefreshSimulationAsync()
+    {
+        var data = await SendAsync(HttpMethod.Get, "/api/admin/simulations");
+        var runs = data.GetProperty("runs");
+        if (_runId is null && runs.GetArrayLength() > 0) _runId = runs[0].GetProperty("runId").GetString();
+        SimulationStatusText.Text = data.GetProperty("active").ValueKind == JsonValueKind.Null
+            ? "No test run loaded."
+            : JsonSerializer.Serialize(data.GetProperty("active"), new JsonSerializerOptions { WriteIndented = true });
+        GamesGrid.ItemsSource = JsonRows(data.GetProperty("games"));
+    }
+
+    private async Task<JsonElement> SendAsync(HttpMethod method, string path, object? body = null, bool authenticated = true)
+    {
+        var baseUrl = ApiUrlTextBox.Text.Trim().TrimEnd('/');
+        using var request = new HttpRequestMessage(method, baseUrl + path);
+        if (body is not null) request.Content = JsonContent.Create(body);
+        if (authenticated && _accessToken is null) throw new InvalidOperationException("Sign in first.");
+        using var response = await _http.SendAsync(request);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = document.RootElement;
+        if (!response.IsSuccessStatusCode)
+        {
+            var message = root.TryGetProperty("error", out var error) && error.TryGetProperty("message", out var text)
+                ? text.GetString() : response.ReasonPhrase;
+            throw new InvalidOperationException(message ?? "The request failed.");
+        }
+        return root.GetProperty("data").Clone();
+    }
+
+    private async Task RunUiAction(Func<Task> action)
+    {
+        try { StatusText.Text = "Working..."; await action(); StatusText.Text = "Ready"; }
+        catch (Exception ex) { StatusText.Text = ex.Message; MessageBox.Show(ex.Message, "myFFL Admin", MessageBoxButton.OK, MessageBoxImage.Warning); }
+    }
+
+    private static string GetCount(JsonElement counts, string name) => counts.TryGetProperty(name, out var value) ? value.ToString() : "0";
+    private static List<Dictionary<string, string>> JsonRows(JsonElement array) => array.EnumerateArray()
+        .Select(item => item.EnumerateObject().ToDictionary(property => property.Name, property => property.Value.ToString())).ToList();
 }

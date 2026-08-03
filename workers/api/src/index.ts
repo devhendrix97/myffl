@@ -24,6 +24,8 @@ import {
 import { ApiException, corsHeaders, errorJson, isAllowedOrigin, json, readJson } from "./http";
 import { handleLeagueRequest } from "./league";
 import { handleScoringRequest } from "./scoring";
+import { handleAdminRequest } from "./admin";
+import { enqueueScheduledProviderWork, processProviderQueue, type ProviderJob } from "./provider";
 
 export default {
   async fetch(request, env, ctx): Promise<Response> {
@@ -87,6 +89,13 @@ export default {
       );
     }
   },
+  async scheduled(_controller, env, ctx): Promise<void> {
+    ctx.waitUntil(enqueueScheduledProviderWork(env));
+  },
+  async queue(batch, env): Promise<void> {
+    if (batch.queue !== "myffl-espn-updates") return;
+    await processProviderQueue(batch as MessageBatch<ProviderJob>, env);
+  },
 } satisfies ExportedHandler<Env>;
 
 async function routeRequest(
@@ -102,7 +111,7 @@ async function routeRequest(
         service: "myffl-api",
         environment: env.ENVIRONMENT,
         status: "healthy",
-        version: "0.4.1",
+        version: "0.5.0",
         utc: new Date().toISOString(),
       } satisfies HealthResponse,
     };
@@ -148,6 +157,8 @@ async function routeRequest(
       correlationId,
     );
   }
+  const adminResult = await handleAdminRequest(request, url, env, ctx, correlationId);
+  if (adminResult) return adminResult;
   const scoringResult = await handleScoringRequest(request, url, env, ctx, correlationId);
   if (scoringResult) return scoringResult;
   const leagueResult = await handleLeagueRequest(request, url, env, ctx, correlationId);
@@ -157,8 +168,8 @@ async function routeRequest(
 
 function phaseStatus(): PhaseStatusResponse {
   return {
-    phase: "phase-3",
-    title: "Custom Scoring Engine",
+    phase: "phase-4",
+    title: "ESPN Data Integration",
     items: [
       {
         key: "cloudflare-resources",
@@ -195,6 +206,18 @@ function phaseStatus(): PhaseStatusResponse {
         label: "Scoring drafts and versions",
         status: "available",
         summary: "Commissioners can edit, preview, audit, and apply versioned scoring rules.",
+      },
+      {
+        key: "espn-provider",
+        label: "ESPN NFL provider",
+        status: "available",
+        summary: "Teams, schedules, game states, box scores, injuries, mappings, and raw archives are synchronized.",
+      },
+      {
+        key: "provider-replay",
+        label: "Provider test mode",
+        status: "available",
+        summary: "Administrators can replay deterministic ESPN-shaped game updates in an isolated data scope.",
       },
     ],
   };

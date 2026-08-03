@@ -26,3 +26,5 @@ secrets/
 # Scratch files
 tmp/
 
+# Production recovery exports
+backups/

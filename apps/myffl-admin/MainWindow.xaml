@@ -1,95 +1,97 @@
 <Window x:Class="MyFFL.Admin.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d"
-        Title="myFFL Admin" Height="720" Width="1180" MinHeight="640" MinWidth="980"
+        Title="myFFL Admin" Height="780" Width="1220" MinHeight="680" MinWidth="1040"
         Background="#05080F" FontFamily="Segoe UI">
     <Window.Resources>
-        <SolidColorBrush x:Key="PanelBrush" Color="#111827"/>
-        <SolidColorBrush x:Key="PanelBorderBrush" Color="#334155"/>
-        <SolidColorBrush x:Key="MutedTextBrush" Color="#D1D5DB"/>
+        <SolidColorBrush x:Key="Panel" Color="#101823"/>
+        <SolidColorBrush x:Key="Border" Color="#374151"/>
+        <SolidColorBrush x:Key="Muted" Color="#AAB6C5"/>
+        <Style TargetType="Button">
+            <Setter Property="Foreground" Value="White"/><Setter Property="Background" Value="#1D4ED8"/>
+            <Setter Property="BorderBrush" Value="#3B82F6"/><Setter Property="Padding" Value="14,9"/>
+            <Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Margin" Value="0,0,8,8"/>
+        </Style>
+        <Style TargetType="TextBox">
+            <Setter Property="Foreground" Value="White"/><Setter Property="Background" Value="#07101D"/>
+            <Setter Property="BorderBrush" Value="#475569"/><Setter Property="Padding" Value="10"/>
+        </Style>
+        <Style TargetType="PasswordBox">
+            <Setter Property="Foreground" Value="White"/><Setter Property="Background" Value="#07101D"/>
+            <Setter Property="BorderBrush" Value="#475569"/><Setter Property="Padding" Value="10"/>
+        </Style>
+        <Style TargetType="GroupBox">
+            <Setter Property="Foreground" Value="White"/><Setter Property="BorderBrush" Value="{StaticResource Border}"/>
+            <Setter Property="Padding" Value="16"/><Setter Property="Margin" Value="0,0,0,14"/>
+        </Style>
     </Window.Resources>
-
     <Grid>
-        <Grid.Background>
-            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                <GradientStop Color="#05080F" Offset="0"/>
-                <GradientStop Color="#111827" Offset="0.55"/>
-                <GradientStop Color="#220A0A" Offset="1"/>
-            </LinearGradientBrush>
-        </Grid.Background>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="76"/>
-            <RowDefinition Height="*"/>
-        </Grid.RowDefinitions>
-
-        <Border Grid.Row="0" Background="#07101D" BorderBrush="#1F2937" BorderThickness="0,0,0,1" Padding="24,0">
-            <DockPanel LastChildFill="False">
-                <TextBlock DockPanel.Dock="Left" VerticalAlignment="Center" FontSize="30" FontWeight="Black" FontStyle="Italic" Foreground="#FFFFFF">
-                    <Run Text="my"/>
-                    <Run Text="FFL" Foreground="#DC2626"/>
-                    <Run Text=" Admin" Foreground="#D1D5DB"/>
+        <Grid.RowDefinitions><RowDefinition Height="72"/><RowDefinition Height="*"/><RowDefinition Height="34"/></Grid.RowDefinitions>
+        <Border Grid.Row="0" Background="#07101D" BorderBrush="#273244" BorderThickness="0,0,0,1" Padding="24,0">
+            <DockPanel>
+                <TextBlock VerticalAlignment="Center" FontSize="29" FontWeight="Black" FontStyle="Italic" Foreground="White">
+                    <Run Text="my"/><Run Text="FFL" Foreground="#DC2626"/><Run Text=" Admin" Foreground="#D1D5DB"/>
                 </TextBlock>
-                <Border DockPanel.Dock="Right" VerticalAlignment="Center" Background="#2A1115" BorderBrush="#DC2626" BorderThickness="1" Padding="12,7">
-                    <TextBlock Text="Restricted Utility" Foreground="#FFFFFF" FontWeight="Bold"/>
-                </Border>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse x:Name="ConnectionIndicator" Width="9" Height="9" Fill="#64748B" Margin="0,0,8,0"/>
+                    <TextBlock x:Name="ConnectionText" Text="Signed out" Foreground="{StaticResource Muted}" VerticalAlignment="Center"/>
+                </StackPanel>
             </DockPanel>
         </Border>
-
-        <ScrollViewer Grid.Row="1" Padding="28">
-            <StackPanel>
-                <TextBlock Text="Platform Operations" Foreground="#FFFFFF" FontSize="36" FontWeight="Bold"/>
-                <TextBlock Text="Admin tools will inspect provider data, scoring changes, failed jobs, and audit trails."
-                           Foreground="{StaticResource MutedTextBrush}" FontSize="16" TextWrapping="Wrap" Width="760"
-                           HorizontalAlignment="Left" Margin="0,8,0,24"/>
-
-                <UniformGrid Columns="3" Rows="2">
-                    <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource PanelBorderBrush}" BorderThickness="1" Padding="18" Margin="0,0,12,12">
-                        <StackPanel>
-                            <TextBlock Text="Users" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
-                            <TextBlock Text="Account and session investigation" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
-                            <TextBlock Text="Phase 11" Foreground="#D1D5DB" FontWeight="Bold" Margin="0,18,0,0"/>
-                        </StackPanel>
-                    </Border>
-                    <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource PanelBorderBrush}" BorderThickness="1" Padding="18" Margin="0,0,12,12">
-                        <StackPanel>
-                            <TextBlock Text="Provider Data" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
-                            <TextBlock Text="ESPN raw archive inspection" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
-                            <TextBlock Text="Phase 4" Foreground="#D1D5DB" FontWeight="Bold" Margin="0,18,0,0"/>
-                        </StackPanel>
-                    </Border>
-                    <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource PanelBorderBrush}" BorderThickness="1" Padding="18" Margin="0,0,0,12">
-                        <StackPanel>
-                            <TextBlock Text="Scoring" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
-                            <TextBlock Text="Preview, apply, and audit corrections" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
-                            <TextBlock Text="Phase 11" Foreground="#D1D5DB" FontWeight="Bold" Margin="0,18,0,0"/>
-                        </StackPanel>
-                    </Border>
-                    <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource PanelBorderBrush}" BorderThickness="1" Padding="18" Margin="0,0,12,0">
-                        <StackPanel>
-                            <TextBlock Text="Jobs" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
-                            <TextBlock Text="Queues, workflows, and retries" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
-                            <TextBlock Text="Planned" Foreground="#D1D5DB" FontWeight="Bold" Margin="0,18,0,0"/>
-                        </StackPanel>
-                    </Border>
-                    <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource PanelBorderBrush}" BorderThickness="1" Padding="18" Margin="0,0,12,0">
-                        <StackPanel>
-                            <TextBlock Text="Audits" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
-                            <TextBlock Text="Commissioner and admin history" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
-                            <TextBlock Text="Schema ready" Foreground="#22C55E" FontWeight="Bold" Margin="0,18,0,0"/>
-                        </StackPanel>
-                    </Border>
-                    <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource PanelBorderBrush}" BorderThickness="1" Padding="18">
-                        <StackPanel>
-                            <TextBlock Text="Cloudflare" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
-                            <TextBlock Text="D1, R2, Queues, Email, Pages" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
-                            <TextBlock Text="Available" Foreground="#22C55E" FontWeight="Bold" Margin="0,18,0,0"/>
-                        </StackPanel>
-                    </Border>
-                </UniformGrid>
+        <Grid Grid.Row="1" Margin="24">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="330"/><ColumnDefinition Width="18"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0">
+                <GroupBox Header="Administrator Sign In">
+                    <StackPanel>
+                        <TextBlock Text="API address" Foreground="{StaticResource Muted}" Margin="0,0,0,5"/>
+                        <TextBox x:Name="ApiUrlTextBox" Text="https://api.myfflapp.com" Margin="0,0,0,12"/>
+                        <TextBlock Text="Email" Foreground="{StaticResource Muted}" Margin="0,0,0,5"/>
+                        <TextBox x:Name="EmailTextBox" Margin="0,0,0,12"/>
+                        <TextBlock Text="Password" Foreground="{StaticResource Muted}" Margin="0,0,0,5"/>
+                        <PasswordBox x:Name="PasswordInput" Margin="0,0,0,14"/>
+                        <Button x:Name="SignInButton" Content="Sign in" Click="SignIn_Click"/>
+                    </StackPanel>
+                </GroupBox>
+                <GroupBox Header="Provider Sync">
+                    <WrapPanel x:Name="ProviderControls" IsEnabled="False">
+                        <Button Content="Scoreboard" Tag="scoreboard" Click="Sync_Click"/>
+                        <Button Content="Teams" Tag="teams" Click="Sync_Click"/>
+                        <Button Content="Injuries" Tag="injuries" Click="Sync_Click" Background="#B91C1C" BorderBrush="#EF4444"/>
+                        <Button Content="Refresh" Click="Refresh_Click" Background="#273449" BorderBrush="#64748B"/>
+                    </WrapPanel>
+                </GroupBox>
+                <GroupBox Header="Test Mode">
+                    <StackPanel x:Name="SimulationControls" IsEnabled="False">
+                        <DockPanel Margin="0,0,0,10"><TextBlock Text="Speed" Foreground="{StaticResource Muted}"/><ComboBox x:Name="SpeedCombo" DockPanel.Dock="Right" Width="90" SelectedIndex="0"><ComboBoxItem Content="1x" Tag="1"/><ComboBoxItem Content="2x" Tag="2"/><ComboBoxItem Content="4x" Tag="4"/></ComboBox></DockPanel>
+                        <Button Content="Start new test run" Click="CreateSimulation_Click"/>
+                        <WrapPanel>
+                            <Button Content="Play" Click="SimulationAction_Click" Tag="play"/>
+                            <Button Content="Pause" Click="SimulationAction_Click" Tag="pause" Background="#273449" BorderBrush="#64748B"/>
+                            <Button Content="Step" Click="SimulationAction_Click" Tag="step"/>
+                            <Button Content="Reset" Click="SimulationAction_Click" Tag="reset" Background="#273449" BorderBrush="#64748B"/>
+                            <Button Content="Stop" Click="SimulationAction_Click" Tag="stop" Background="#B91C1C" BorderBrush="#EF4444"/>
+                        </WrapPanel>
+                    </StackPanel>
+                </GroupBox>
             </StackPanel>
-        </ScrollViewer>
+            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <TextBlock Text="Provider Operations" Foreground="White" FontSize="30" FontWeight="Bold"/>
+                    <TextBlock Text="ESPN ingestion health and isolated game replay" Foreground="{StaticResource Muted}" FontSize="15" Margin="0,5,0,18"/>
+                    <UniformGrid Columns="4" Margin="0,0,0,14">
+                        <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="14" Margin="0,0,8,0"><StackPanel><TextBlock Text="Teams" Foreground="{StaticResource Muted}"/><TextBlock x:Name="TeamsCount" Text="-" Foreground="White" FontSize="24" FontWeight="Bold"/></StackPanel></Border>
+                        <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="14" Margin="0,0,8,0"><StackPanel><TextBlock Text="Players" Foreground="{StaticResource Muted}"/><TextBlock x:Name="PlayersCount" Text="-" Foreground="White" FontSize="24" FontWeight="Bold"/></StackPanel></Border>
+                        <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="14" Margin="0,0,8,0"><StackPanel><TextBlock Text="Events" Foreground="{StaticResource Muted}"/><TextBlock x:Name="EventsCount" Text="-" Foreground="White" FontSize="24" FontWeight="Bold"/></StackPanel></Border>
+                        <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="14"><StackPanel><TextBlock Text="Raw archives" Foreground="{StaticResource Muted}"/><TextBlock x:Name="ArchivesCount" Text="-" Foreground="White" FontSize="24" FontWeight="Bold"/></StackPanel></Border>
+                    </UniformGrid>
+                    <GroupBox Header="Current Test Run"><TextBlock x:Name="SimulationStatusText" Text="No test run loaded." Foreground="{StaticResource Muted}" TextWrapping="Wrap" FontFamily="Consolas"/></GroupBox>
+                    <GroupBox Header="Game Progress"><DataGrid x:Name="GamesGrid" AutoGenerateColumns="True" IsReadOnly="True" Background="#07101D" Foreground="White" BorderThickness="0" MinHeight="120"/></GroupBox>
+                    <GroupBox Header="Provider Activity"><TextBox x:Name="ActivityText" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" MinHeight="170" FontFamily="Consolas"/></GroupBox>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+        <Border Grid.Row="2" Background="#07101D" BorderBrush="#273244" BorderThickness="0,1,0,0" Padding="14,0">
+            <TextBlock x:Name="StatusText" Text="Ready" Foreground="{StaticResource Muted}" VerticalAlignment="Center"/>
+        </Border>
     </Grid>
 </Window>

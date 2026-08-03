@@ -10,6 +10,9 @@
       "head_sampling_rate": 1
     }
   },
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
   "vars": {
     "ENVIRONMENT": "local",
     "APPLICATION_BASE_URL": "http://localhost:5173",
@@ -69,6 +72,15 @@
         "binding": "WAIVERS_QUEUE",
         "queue": "myffl-waivers"
       }
+    ],
+    "consumers": [
+      {
+        "queue": "myffl-espn-updates",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 5,
+        "dead_letter_queue": "myffl-dead-letter"
+      }
     ]
   },
   "ratelimits": [
@@ -87,6 +99,9 @@
   "env": {
     "production": {
       "name": "myffl-api-production",
+      "triggers": {
+        "crons": ["* * * * *"]
+      },
       "vars": {
         "ENVIRONMENT": "production",
         "APPLICATION_BASE_URL": "https://app.myfflapp.com",
@@ -146,6 +161,15 @@
             "binding": "WAIVERS_QUEUE",
             "queue": "myffl-waivers"
           }
+        ],
+        "consumers": [
+          {
+            "queue": "myffl-espn-updates",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_retries": 5,
+            "dead_letter_queue": "myffl-dead-letter"
+          }
         ]
       },
       "ratelimits": [
@@ -170,6 +194,9 @@
     },
     "staging": {
       "name": "myffl-api-staging",
+      "triggers": {
+        "crons": []
+      },
       "vars": {
         "ENVIRONMENT": "staging",
         "APPLICATION_BASE_URL": "https://staging.myfflapp.com",
@@ -229,7 +256,8 @@
             "binding": "WAIVERS_QUEUE",
             "queue": "myffl-waivers"
           }
-        ]
+        ],
+        "consumers": []
       },
       "ratelimits": [
         {
