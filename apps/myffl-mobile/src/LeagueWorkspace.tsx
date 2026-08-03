@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type {
   AuthSessionResponse,
   CreateLeagueRequest,
@@ -12,11 +12,14 @@ import type {
   LeagueFormat,
   LeagueInvitationResponse,
   LeaguePlayerSearchItem,
+  LeagueScheduleResponse,
+  LeagueScoreboardResponse,
   LineupOptimizationResponse,
   LeaguePrivacy,
   LeagueScheduleInput,
   LeagueSummary,
   PlayerProfileResponse,
+  PlayoffBracketResponse,
   RosterPositionLimitInput,
   RosterSlotInput,
   ScoringCalculationType,
@@ -27,6 +30,7 @@ import type {
   ScoringRule,
   ScoringVersionSummary,
   TeamLineupResponse,
+  StandingView,
   TradeAssetInput,
   TransactionsDashboardResponse,
   TransactionSettingsResponse,
@@ -80,7 +84,7 @@ const apiBaseUrl =
   (isLocalHost ? "http://localhost:8787" : "https://api.myfflapp.com");
 
 type WorkspaceView = "home" | "create" | "join" | "league" | "game";
-type LeagueTab = "overview" | "members" | "team" | "players" | "transactions" | "draft" | "scoring" | "settings";
+type LeagueTab = "overview" | "members" | "team" | "gameday" | "players" | "transactions" | "draft" | "scoring" | "settings";
 
 interface ApiEnvelope<T> {
   ok: boolean;
@@ -868,7 +872,7 @@ function LeagueDetailView({
         <span className={`league-state ${league.status}`}>{league.status}</span>
       </header>
       <div className="league-tabs" role="tablist">
-        {(["overview", "members", "team", "players", "transactions", "draft", "scoring", "settings"] as LeagueTab[]).map((item) => (
+        {(["overview", "members", "team", "gameday", "players", "transactions", "draft", "scoring", "settings"] as LeagueTab[]).map((item) => (
           <button role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} type="button" key={item} onClick={() => setTab(item)}>{item}</button>
         ))}
       </div>
@@ -907,6 +911,7 @@ function LeagueDetailView({
       )}
       {tab === "members" && <MembersView league={league} />}
       {tab === "team" && <TeamView league={league} accessToken={accessToken} />}
+      {tab === "gameday" && <GamedayView league={league} accessToken={accessToken} canManage={canManage} />}
       {tab === "players" && <PlayersView league={league} accessToken={accessToken} />}
       {tab === "transactions" && <TransactionsView league={league} accessToken={accessToken} canManage={canManage} />}
       {tab === "draft" && <DraftView league={league} accessToken={accessToken} />}
@@ -925,6 +930,35 @@ function LeagueDetailView({
       )}
     </div>
   );
+}
+
+function GamedayView({ league, accessToken, canManage }: { league: LeagueDetail; accessToken: string; canManage: boolean }) {
+  const [mode, setMode] = useState<"scoreboard"|"standings"|"schedule"|"playoffs">("scoreboard");
+  const [week, setWeek] = useState(1);
+  const [scoreboard, setScoreboard] = useState<LeagueScoreboardResponse | null>(null);
+  const [selectedMatchup, setSelectedMatchup] = useState<LeagueScoreboardResponse["matchups"][number] | null>(null);
+  const [standings, setStandings] = useState<StandingView[]>([]);
+  const [schedule, setSchedule] = useState<LeagueScheduleResponse | null>(null);
+  const [brackets, setBrackets] = useState<PlayoffBracketResponse[]>([]);
+  const [connection, setConnection] = useState<"connecting"|"live"|"reconnecting"|"offline">("connecting");
+  const [busy, setBusy] = useState(true); const [error, setError] = useState("");
+  const selectedMatchupId = useRef<string | null>(null);
+
+  useEffect(() => {
+    selectedMatchupId.current = selectedMatchup?.matchupId ?? null;
+  }, [selectedMatchup]);
+
+  async function loadScoreboard(silent = false) { if (!silent) setBusy(true); try { const next=await leagueRequest<LeagueScoreboardResponse>(`/api/leagues/${league.leagueId}/matchups?week=${week}`,accessToken);setScoreboard(next);if(selectedMatchup){const match=next.matchups.find(item=>item.matchupId===selectedMatchup.matchupId);if(match)setSelectedMatchup(match);}setError("");}catch(requestError){setError(requestError instanceof Error?requestError.message:"Unable to load the scoreboard.");}finally{if(!silent)setBusy(false);} }
+  useEffect(()=>{if(mode==="scoreboard")void loadScoreboard();else{setBusy(true);const path=mode;leagueRequest<StandingView[]|LeagueScheduleResponse|PlayoffBracketResponse[]>(`/api/leagues/${league.leagueId}/${path}`,accessToken).then(data=>{if(mode==="standings")setStandings(data as StandingView[]);if(mode==="schedule")setSchedule(data as LeagueScheduleResponse);if(mode==="playoffs")setBrackets(data as PlayoffBracketResponse[]);setError("");}).catch(requestError=>setError(requestError instanceof Error?requestError.message:`Unable to load ${mode}.`)).finally(()=>setBusy(false));}},[accessToken,league.leagueId,mode,week]);
+
+  useEffect(()=>{if(mode!=="scoreboard")return;let socket:WebSocket|undefined;let stopped=false;let retry=0;let timer:number|undefined;async function refreshRealtimeView(){await loadScoreboard(true);if(selectedMatchupId.current)await openMatchup(selectedMatchupId.current,true);}async function connect(){try{setConnection(retry?"reconnecting":"connecting");const ticket=await leagueRequest<{ticket:string}>("/api/realtime/ticket",accessToken,{method:"POST",body:{leagueId:league.leagueId}});const revision=Math.max(0,...(scoreboard?.matchups.map(matchup=>matchup.revisionNumber)??[0]));socket=new WebSocket(`${apiBaseUrl.replace(/^http/,"ws")}/api/realtime/leagues/${league.leagueId}?since=${revision}`,["myffl-realtime",ticket.ticket]);socket.onopen=()=>{retry=0;setConnection("live");};socket.onmessage=(event)=>{try{const message=JSON.parse(String(event.data)) as {type?:string;event?:{eventType?:string}};if(message.type==="realtime.event"&&message.event?.eventType==="MatchupScoreUpdated")void refreshRealtimeView();if(message.type==="realtime.ready")void refreshRealtimeView();}catch{/* Ignore malformed frames. */}};socket.onclose=()=>{if(stopped)return;setConnection(navigator.onLine?"reconnecting":"offline");retry++;timer=window.setTimeout(()=>void connect(),Math.min(15000,500*2**retry));};socket.onerror=()=>socket?.close();}catch{if(!stopped){retry++;setConnection(navigator.onLine?"reconnecting":"offline");timer=window.setTimeout(()=>void connect(),Math.min(15000,500*2**retry));}}}void connect();return()=>{stopped=true;if(timer)window.clearTimeout(timer);socket?.close();};},[accessToken,league.leagueId,mode,week]);
+
+  async function openMatchup(matchupId:string, silent=false){if(!silent)setBusy(true);try{setSelectedMatchup(await leagueRequest<LeagueScoreboardResponse["matchups"][number]>(`/api/leagues/${league.leagueId}/matchups/${matchupId}`,accessToken));}catch(requestError){setError(requestError instanceof Error?requestError.message:"Unable to load matchup detail.");}finally{if(!silent)setBusy(false);}}
+  async function regenerate(){try{setSchedule(await leagueRequest<LeagueScheduleResponse>(`/api/leagues/${league.leagueId}/schedule/regenerate`,accessToken,{method:"POST",body:{}}));}catch(requestError){setError(requestError instanceof Error?requestError.message:"Unable to regenerate the schedule.");}}
+
+  return <div className="gameday-room">{error&&<InlineAlert message={error} onClose={()=>setError("")}/>}<header className="gameday-heading"><div><p className="eyebrow">League competition</p><h2>Gameday</h2></div><div className="gameday-modes">{(["scoreboard","standings","schedule","playoffs"] as const).map(item=><button className={mode===item?"active":""} onClick={()=>setMode(item)} key={item}>{item}</button>)}</div>{mode==="scoreboard"&&<label>Week<select value={week} onChange={event=>setWeek(Number(event.target.value))}>{Array.from({length:18},(_,index)=><option value={index+1} key={index+1}>Week {index+1}</option>)}</select></label>}</header>
+    {busy&&!scoreboard?<div className="workspace-loading"><LoaderCircle className="spin" size={26}/><span>Loading {mode}</span></div>:mode==="scoreboard"&&scoreboard?<><div className="realtime-status"><Radio size={14}/><span className={connection}>{connection}</span><small>{scoreboard.dataScope.startsWith("simulation:")?"Admin replay":"Live provider"}</small></div><section className="scoreboard-grid">{scoreboard.matchups.map(matchup=><button className="scoreboard-matchup" onClick={()=>void openMatchup(matchup.matchupId)} key={matchup.matchupId}><header><span>Matchup {matchup.matchupNumber}</span><b className={matchup.status}>{matchup.status}</b></header>{matchup.teams.map(team=><div key={team.fantasyTeamId}><span><strong>{team.teamName}</strong><small>{team.remainingPlayers} remaining</small></span><em>{team.score.toFixed(1)}</em><i>{team.projectedScore.toFixed(1)} proj</i></div>)}</button>)}</section>{selectedMatchup&&<section className="matchup-detail"><div className="section-heading"><div><p className="eyebrow">Week {selectedMatchup.weekNumber}</p><h2>Matchup detail</h2></div><button className="icon-button" onClick={()=>setSelectedMatchup(null)} aria-label="Close matchup detail"><X size={17}/></button></div><div className="matchup-team-columns">{selectedMatchup.teams.map(team=><div key={team.fantasyTeamId}><header><span><strong>{team.teamName}</strong><small>{team.winProbability.toFixed(1)}% win chance</small></span><b>{team.score.toFixed(1)}</b></header><div className="projection-bar"><span style={{width:`${Math.max(0,Math.min(100,team.winProbability))}%`}}/></div>{team.players?.map(player=><details className={player.starter?"matchup-player starter":"matchup-player"} key={player.rosterPlayerId}><summary><b>{player.slotType}</b><span><strong>{player.displayName}</strong><small>{player.position} {player.nflTeam} - {player.gameStatus}</small></span><em>{player.points.toFixed(1)}</em></summary>{player.scoringBreakdown.map(item=><p key={item.displayName}><span>{item.displayName}</span><small>{item.explanation}</small><b>{item.points.toFixed(1)}</b></p>)}</details>)}</div>)}</div></section>}</>:mode==="standings"?<section className="standings-sheet"><div className="standings-row standings-header"><span>Rank</span><span>Team</span><span>W-L-T</span><span>Pct</span><span>PF</span><span>PA</span><span>All play</span><span>Streak</span><span>Waiver</span></div>{standings.map(team=><div className="standings-row" key={team.fantasyTeamId}><b>{team.rank}</b><span><strong>{team.teamName}</strong><small>{team.playoffStatus}</small></span><span>{team.wins}-{team.losses}-{team.ties}</span><span>{team.winningPercentage.toFixed(3)}</span><span>{team.pointsFor.toFixed(1)}</span><span>{team.pointsAgainst.toFixed(1)}</span><span>{team.allPlayRecord}</span><span>{team.streak}</span><span>{team.waiverPriority}</span></div>)}</section>:mode==="schedule"&&schedule?<section className="schedule-sheet"><div className="section-heading"><div><p className="eyebrow">Regular season</p><h2>League schedule</h2></div>{canManage&&<button className="outline-button compact" onClick={()=>void regenerate()}><RefreshCw size={15}/> Regenerate</button>}</div>{schedule.weeks.map(item=><div className="schedule-week" key={item.weekNumber}><b>Week {item.weekNumber}</b><div>{item.matchups.map(matchup=><p key={matchup.matchupId}>{matchup.teams.map(team=>team.teamName).join(" vs ")}</p>)}</div></div>)}</section>:mode==="playoffs"?<section className="playoff-brackets">{brackets.length?brackets.map(bracket=><div key={bracket.bracketId}><div className="section-heading"><div><p className="eyebrow">{bracket.status}</p><h2>{formatLabel(bracket.bracketType)} bracket</h2></div></div><div className="bracket-rounds">{bracket.rounds.map(round=><div className="bracket-round" key={round.roundId}><header><strong>{round.displayName}</strong><small>Week {round.startWeek}{round.weekCount>1?`-${round.startWeek+round.weekCount-1}`:""}</small></header>{round.matchups.map(matchup=><div className="bracket-matchup" key={matchup.playoffMatchupId}><p><b>{matchup.higherSeed??"-"}</b><span>{matchup.higherTeamName??"TBD"}</span><strong>{matchup.higherScore.toFixed(1)}</strong></p><p><b>{matchup.lowerSeed??"-"}</b><span>{matchup.lowerTeamName??"TBD"}</span><strong>{matchup.lowerScore.toFixed(1)}</strong></p></div>)}</div>)}</div></div>):<p className="muted-empty">Playoff seeding appears after finalized standings are available.</p>}</section>:null}
+  </div>;
 }
 
 function TransactionsView({ league, accessToken, canManage }: { league: LeagueDetail; accessToken: string; canManage: boolean }) {
@@ -1831,13 +1865,15 @@ function formatRole(role: string): string {
   return role.split("-").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
 }
 
-function formatLabel(format: LeagueFormat): string {
-  const labels: Record<LeagueFormat, string> = {
+function formatLabel(format: LeagueFormat | "championship" | "consolation"): string {
+  const labels: Record<LeagueFormat | "championship" | "consolation", string> = {
     "single-season": "Single Season",
     redraft: "Redraft",
     keeper: "Keeper",
     dynasty: "Dynasty",
     "best-ball": "Best Ball",
+    championship: "Championship",
+    consolation: "Consolation",
   };
   return labels[format];
 }

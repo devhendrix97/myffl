@@ -6,6 +6,7 @@ import {
   type EngineTier,
   type ScoreCalculation,
 } from "./scoring-engine";
+import { refreshLeagueWeek } from "./matchups";
 
 export type ScoringJob =
   | { type: "score-event"; eventId: string; dataScope: string; sourceUpdatedAtUtc: string }
@@ -93,7 +94,9 @@ export async function processScoringJob(env: Env, job: ScoringJob): Promise<void
     await withReceipt(env.LEAGUE_DB_001, receiptKey, job.type, async () => {
       let players = 0;
       for (const season of seasons.results ?? []) {
-        players += await scoreEventForSeason(env, season, job.eventId, job.dataScope, event.completed === 1);
+        const changed = await scoreEventForSeason(env, season, job.eventId, job.dataScope, event.completed === 1);
+        players += changed;
+        if (changed) await refreshLeagueWeek(env, season.league_id, season.league_season_id, event.week, `score:${job.eventId}:${job.sourceUpdatedAtUtc}`);
       }
       return { events: 1, players };
     });
@@ -117,17 +120,19 @@ export async function processScoringJob(env: Env, job: ScoringJob): Promise<void
   const weeks = job.affectedWeeks;
   const placeholders = weeks.map((_, index) => `?${index + 2}`).join(",");
   const events = await env.NFL_DB.prepare(
-    `select distinct events.nfl_event_id as eventId, stats.data_scope as dataScope,
+    `select distinct events.nfl_event_id as eventId, events.week as week, stats.data_scope as dataScope,
             snapshots.completed as completed
      from nfl_events events
      join nfl_player_game_stats stats on stats.nfl_event_id = events.nfl_event_id
      left join nfl_event_snapshots snapshots on snapshots.nfl_event_id = events.nfl_event_id and snapshots.data_scope = stats.data_scope
      where events.season_year = ?1 and events.week in (${placeholders})`,
-  ).bind(seasonYear?.season_year ?? 0, ...weeks).all<{ eventId: string; dataScope: string; completed: number }>();
+  ).bind(seasonYear?.season_year ?? 0, ...weeks).all<{ eventId: string; dataScope: string; completed: number; week: number }>();
   await withReceipt(env.LEAGUE_DB_001, receiptKey, job.type, async () => {
     let players = 0;
     for (const event of events.results ?? []) {
-      players += await scoreEventForSeason(env, season, event.eventId, event.dataScope, event.completed === 1);
+      const changed = await scoreEventForSeason(env, season, event.eventId, event.dataScope, event.completed === 1);
+      players += changed;
+      if (changed) await refreshLeagueWeek(env, season.league_id, season.league_season_id, event.week, `recalculate:${event.eventId}:${job.requestedAtUtc}`);
     }
     return { events: events.results?.length ?? 0, players };
   });

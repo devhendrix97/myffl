@@ -31,6 +31,9 @@ import { processScoringQueue, type ScoringJob } from "./score-processing";
 import { handleDraftRequest, processExpiredDrafts } from "./draft";
 import { handleTeamRequest } from "./team";
 import { enqueueDueWaivers, handleTransactionRequest, processDueTrades, processWaiverQueue, type WaiverJob } from "./transactions";
+import { handleRealtimeRequest } from "./realtime";
+import { handleMatchupRequest } from "./matchups";
+export { LeagueRealtime, LiveNflEvent, MatchupRealtime } from "./realtime";
 
 export default {
   async fetch(request, env, ctx): Promise<Response> {
@@ -53,6 +56,7 @@ export default {
     try {
       const url = new URL(request.url);
       const result = await routeRequest(request, url, env, ctx, correlationId);
+      if (result instanceof Response) return result;
       if (!result) {
         return errorJson(
           { code: "not_found", message: "The requested endpoint does not exist." },
@@ -118,14 +122,14 @@ async function routeRequest(
   env: Env,
   ctx: ExecutionContext,
   correlationId: string,
-): Promise<HandlerResult<unknown> | undefined> {
+): Promise<HandlerResult<unknown> | Response | undefined> {
   if (request.method === "GET" && url.pathname === "/health") {
     return {
       data: {
         service: "myffl-api",
         environment: env.ENVIRONMENT,
         status: "healthy",
-        version: "0.9.0",
+        version: "0.10.0",
         utc: new Date().toISOString(),
       } satisfies HealthResponse,
     };
@@ -173,6 +177,8 @@ async function routeRequest(
   }
   const adminResult = await handleAdminRequest(request, url, env, ctx, correlationId);
   if (adminResult) return adminResult;
+  const realtimeResult = await handleRealtimeRequest(request, url, env);
+  if (realtimeResult) return realtimeResult;
   const gameFeedResult = await handleGameFeedRequest(request, url, env);
   if (gameFeedResult) return gameFeedResult;
   const scoringResult = await handleScoringRequest(request, url, env, ctx, correlationId);
@@ -183,6 +189,8 @@ async function routeRequest(
   if (teamResult) return teamResult;
   const transactionResult = await handleTransactionRequest(request, url, env, correlationId);
   if (transactionResult) return transactionResult;
+  const matchupResult = await handleMatchupRequest(request, url, env, correlationId);
+  if (matchupResult) return matchupResult;
   const leagueResult = await handleLeagueRequest(request, url, env, ctx, correlationId);
   if (leagueResult) return leagueResult;
   return undefined;
@@ -190,8 +198,8 @@ async function routeRequest(
 
 function phaseStatus(): PhaseStatusResponse {
   return {
-    phase: "phase-8",
-    title: "Transactions",
+    phase: "phase-9",
+    title: "Real-Time Gameday",
     items: [
       {
         key: "cloudflare-resources",
@@ -276,6 +284,24 @@ function phaseStatus(): PhaseStatusResponse {
         label: "Multi-asset trades",
         status: "available",
         summary: "Players, FAAB, and future picks support proposals, counteroffers, review, voting, expiration, validation, and atomic settlement.",
+      },
+      {
+        key: "realtime-gameday",
+        label: "Real-time gameday",
+        status: "available",
+        summary: "Durable Object WebSocket rooms deliver resumable league, matchup, and NFL event updates.",
+      },
+      {
+        key: "matchups-standings",
+        label: "Matchups and standings",
+        status: "available",
+        summary: "Live scores, projections, win probability, player breakdowns, schedules, standings, and snapshots are available.",
+      },
+      {
+        key: "playoff-brackets",
+        label: "Playoff brackets",
+        status: "available",
+        summary: "Seeded brackets support byes, multi-week totals, advancement, consolation play, and third-place matchups.",
       },
     ],
   };

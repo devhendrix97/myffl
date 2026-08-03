@@ -10,6 +10,18 @@
       "head_sampling_rate": 1
     }
   },
+  "exports": {
+    "LeagueRealtime": { "type": "durable-object", "storage": "sqlite" },
+    "MatchupRealtime": { "type": "durable-object", "storage": "sqlite" },
+    "LiveNflEvent": { "type": "durable-object", "storage": "sqlite" }
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "LEAGUE_REALTIME", "class_name": "LeagueRealtime" },
+      { "name": "MATCHUP_REALTIME", "class_name": "MatchupRealtime" },
+      { "name": "LIVE_NFL_EVENT", "class_name": "LiveNflEvent" }
+    ]
+  },
   "triggers": {
     "crons": ["* * * * *"]
   },
@@ -123,6 +135,13 @@
         "EMAIL_FROM_ADDRESS": "noreply@myfflapp.com",
         "EMAIL_FROM_NAME": "myFFL"
       },
+      "durable_objects": {
+        "bindings": [
+          { "name": "LEAGUE_REALTIME", "class_name": "LeagueRealtime" },
+          { "name": "MATCHUP_REALTIME", "class_name": "MatchupRealtime" },
+          { "name": "LIVE_NFL_EVENT", "class_name": "LiveNflEvent" }
+        ]
+      },
       "d1_databases": [
         {
           "binding": "CORE_DB",
@@ -231,6 +250,13 @@
         "API_BASE_URL": "https://api-staging.myfflapp.com",
         "EMAIL_FROM_ADDRESS": "noreply@myfflapp.com",
         "EMAIL_FROM_NAME": "myFFL"
+      },
+      "durable_objects": {
+        "bindings": [
+          { "name": "LEAGUE_REALTIME", "class_name": "LeagueRealtime" },
+          { "name": "MATCHUP_REALTIME", "class_name": "MatchupRealtime" },
+          { "name": "LIVE_NFL_EVENT", "class_name": "LiveNflEvent" }
+        ]
       },
       "d1_databases": [
         {

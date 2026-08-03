@@ -218,6 +218,14 @@ async function initializeLineup(db: D1Database, seasonId: string, teamId: string
   try { await db.batch(statements); } catch (error) { const existing = await db.prepare("select lineup_period_id from lineup_periods where league_season_id = ?1 and fantasy_team_id = ?2 and week_number = ?3").bind(seasonId, teamId, week).first(); if (!existing) throw error; }
 }
 
+export async function ensureTeamLineupPeriod(db: D1Database, seasonId: string, teamId: string, userId: string, week: number): Promise<string> {
+  let period = await db.prepare("select lineup_period_id from lineup_periods where league_season_id=?1 and fantasy_team_id=?2 and week_number=?3").bind(seasonId, teamId, week).first<{ lineup_period_id: string }>();
+  if (!period) { await initializeLineup(db, seasonId, teamId, userId, week); period = await db.prepare("select lineup_period_id from lineup_periods where league_season_id=?1 and fantasy_team_id=?2 and week_number=?3").bind(seasonId, teamId, week).first<{ lineup_period_id: string }>(); }
+  if (!period) throw new ApiException(500, "lineup_initialization_failed", "The lineup could not be initialized.");
+  await syncLineupRoster(db, period.lineup_period_id, seasonId, teamId, userId);
+  return period.lineup_period_id;
+}
+
 async function saveLineup(principal: AccessTokenPrincipal, db: D1Database, leagueId: string, seasonId: string, body: SaveLineupRequest, env: Env, correlationId: string): Promise<TeamLineupResponse> {
   const week = requireWeek(body.weekNumber);
   const current = await getTeamLineup(principal, db, leagueId, seasonId, week, env);

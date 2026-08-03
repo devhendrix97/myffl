@@ -497,6 +497,84 @@ export interface ProposeTradeRequest {
   parentTradeId?: string;
 }
 
+export interface MatchupPlayerView {
+  rosterPlayerId: string;
+  playerId: string;
+  displayName: string;
+  position: string;
+  nflTeam?: string;
+  slotType: string;
+  starter: boolean;
+  points: number;
+  projectedPoints: number;
+  gameStatus: string;
+  remaining: boolean;
+  scoringBreakdown: Array<{ displayName: string; points: number; explanation: string }>;
+}
+
+export interface MatchupTeamView {
+  fantasyTeamId: string;
+  teamName: string;
+  side: "home" | "away" | "bye";
+  score: number;
+  benchPoints: number;
+  projectedScore: number;
+  winProbability: number;
+  remainingPlayers: number;
+  result?: "win" | "loss" | "tie";
+  players?: MatchupPlayerView[];
+}
+
+export interface MatchupView {
+  matchupId: string;
+  weekNumber: number;
+  matchupNumber: number;
+  status: "scheduled" | "live" | "final" | "corrected";
+  revisionNumber: number;
+  updatedAtUtc: string;
+  teams: MatchupTeamView[];
+}
+
+export interface LeagueScoreboardResponse {
+  leagueId: string;
+  seasonId: string;
+  weekNumber: number;
+  serverUtc: string;
+  dataScope: string;
+  realtimeChannel: string;
+  matchups: MatchupView[];
+}
+
+export interface StandingView {
+  rank: number;
+  fantasyTeamId: string;
+  teamName: string;
+  wins: number;
+  losses: number;
+  ties: number;
+  winningPercentage: number;
+  pointsFor: number;
+  pointsAgainst: number;
+  divisionRecord: string;
+  allPlayRecord: string;
+  benchPoints: number;
+  streak: string;
+  waiverPriority: number;
+  playoffStatus: "alive" | "clinched" | "eliminated" | "champion";
+}
+
+export interface LeagueScheduleResponse {
+  seasonId: string;
+  weeks: Array<{ weekNumber: number; matchups: Array<{ matchupId: string; matchupNumber: number; teams: Array<{ fantasyTeamId: string; teamName: string; side: string }> }> }>;
+}
+
+export interface PlayoffBracketResponse {
+  bracketId: string;
+  bracketType: "championship" | "consolation";
+  status: string;
+  rounds: Array<{ roundId: string; roundNumber: number; displayName: string; startWeek: number; weekCount: number; matchups: Array<{ playoffMatchupId: string; matchupNumber: number; higherSeed?: number; lowerSeed?: number; higherTeamName?: string; lowerTeamName?: string; higherScore: number; lowerScore: number; winnerTeamName?: string }> }>;
+}
+
 export interface ScoringPresetSummary {
   presetKey: ScoringPresetKey;
   displayName: string;
