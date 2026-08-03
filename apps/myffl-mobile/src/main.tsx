@@ -390,7 +390,10 @@ function RegistrationPending({
       <div className="result-icon"><Mail size={28} /></div>
       <p className="eyebrow">Check your inbox</p>
       <h2>Verify your email</h2>
-      <p>We sent an account link to <strong>{registration.email}</strong>.</p>
+      <p>
+        We sent an account link to <strong>{registration.email}</strong>. Click the link to verify
+        your account! Make sure to check your spam folder!
+      </p>
       {registration.emailDeliveryStatus === "deferred" && (
         <FormNotice notice="Cloudflare accepted your account, but the first email was delayed. Try resend below." />
       )}
