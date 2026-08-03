@@ -56,7 +56,7 @@ export function corsHeaders(request: Request, env: Env): HeadersInit {
   return {
     "access-control-allow-origin": origin,
     "access-control-allow-credentials": "true",
-    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-methods": "GET,POST,PATCH,OPTIONS",
     "access-control-allow-headers": "content-type,authorization,x-correlation-id",
     "access-control-max-age": "86400",
     vary: "Origin",

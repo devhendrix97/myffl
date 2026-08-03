@@ -523,7 +523,7 @@ async function sessionResponse(
   };
 }
 
-async function authenticate(request: Request, env: Env): Promise<AccessTokenPrincipal> {
+export async function authenticate(request: Request, env: Env): Promise<AccessTokenPrincipal> {
   const principal = await requireAccessPrincipal(request, env);
   const active = await env.CORE_DB.prepare(
     `select refresh.refresh_token_id

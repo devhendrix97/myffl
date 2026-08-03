@@ -4,32 +4,27 @@ import type {
   ApiEnvelope,
   AuthSessionResponse,
   MessageResponse,
-  PhaseStatusResponse,
   RegistrationResponse,
   VerifyEmailResponse,
 } from "@myffl/api-contracts";
 import {
   AlertCircle,
   ArrowLeft,
-  CalendarDays,
   CheckCircle2,
   Eye,
   EyeOff,
-  Home,
   LoaderCircle,
   LockKeyhole,
   LogIn,
-  LogOut,
   Mail,
-  Radio,
   RefreshCw,
-  Settings,
   ShieldCheck,
   Trophy,
   UserPlus,
   Users,
 } from "lucide-react";
 import "./styles.css";
+import { LeagueWorkspace } from "./LeagueWorkspace";
 
 const isLocalHost = ["localhost", "127.0.0.1"].includes(window.location.hostname);
 const apiBaseUrl =
@@ -520,73 +515,7 @@ function AccountResultPage({
 }
 
 function Dashboard({ session, onLogout }: { session: AuthSessionResponse; onLogout: () => Promise<void> }) {
-  const [phaseStatus, setPhaseStatus] = useState<PhaseStatusResponse | null>(null);
-  useEffect(() => {
-    apiRequest<PhaseStatusResponse>("/phase-status", { method: "GET" })
-      .then(setPhaseStatus)
-      .catch(() => setPhaseStatus(null));
-  }, []);
-
-  return (
-    <main className="app-shell">
-      <aside className="sidebar">
-        <Brand />
-        <nav aria-label="Primary">
-          <a className="active" href="/"><Home size={19} /> Home</a>
-          <a href="#leagues"><Trophy size={19} /> Leagues</a>
-          <a href="#team"><Users size={19} /> My team</a>
-          <a href="#schedule"><CalendarDays size={19} /> Schedule</a>
-          <a href="#live"><Radio size={19} /> Live scoring</a>
-        </nav>
-        <button className="sidebar-action" type="button" onClick={onLogout}><LogOut size={19} /> Sign out</button>
-      </aside>
-
-      <section className="workspace">
-        <header className="workspace-header">
-          <div>
-            <p className="eyebrow">Home</p>
-            <h1>Welcome, {session.displayName}</h1>
-          </div>
-          <div className="user-avatar" aria-label={`Signed in as ${session.displayName}`}>
-            {session.displayName.slice(0, 2).toUpperCase()}
-          </div>
-        </header>
-
-        <section className="league-empty" id="leagues">
-          <div className="field-lines" aria-hidden="true" />
-          <div>
-            <p className="eyebrow">2026 season</p>
-            <h2>Build your first league</h2>
-            <p>League creation and commissioner controls arrive in Phase 2.</p>
-            <button className="primary-button" type="button" disabled><Trophy size={18} /> Create league</button>
-          </div>
-        </section>
-
-        <section className="status-section">
-          <div className="section-heading">
-            <div><p className="eyebrow">Platform</p><h2>Foundation status</h2></div>
-            <Settings size={22} />
-          </div>
-          <div className="status-grid">
-            {(phaseStatus?.items ?? []).map((item) => (
-              <article className="status-card" key={item.key}>
-                <span className={`status-dot ${item.status}`} />
-                <h3>{item.label}</h3>
-                <p>{item.summary}</p>
-              </article>
-            ))}
-          </div>
-        </section>
-      </section>
-
-      <nav className="mobile-nav" aria-label="Primary mobile navigation">
-        <a className="active" href="/" aria-label="Home"><Home size={21} /></a>
-        <a href="#leagues" aria-label="Leagues"><Trophy size={21} /></a>
-        <a href="#team" aria-label="My team"><Users size={21} /></a>
-        <a href="#live" aria-label="Live scoring"><Radio size={21} /></a>
-      </nav>
-    </main>
-  );
+  return <LeagueWorkspace session={session} onLogout={onLogout} />;
 }
 
 function LeaguePulse() {

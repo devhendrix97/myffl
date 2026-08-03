@@ -22,6 +22,7 @@ import {
   type HandlerResult,
 } from "./auth";
 import { ApiException, corsHeaders, errorJson, isAllowedOrigin, json, readJson } from "./http";
+import { handleLeagueRequest } from "./league";
 
 export default {
   async fetch(request, env, ctx): Promise<Response> {
@@ -100,7 +101,7 @@ async function routeRequest(
         service: "myffl-api",
         environment: env.ENVIRONMENT,
         status: "healthy",
-        version: "0.2.0",
+        version: "0.3.0",
         utc: new Date().toISOString(),
       } satisfies HealthResponse,
     };
@@ -146,13 +147,15 @@ async function routeRequest(
       correlationId,
     );
   }
+  const leagueResult = await handleLeagueRequest(request, url, env, ctx, correlationId);
+  if (leagueResult) return leagueResult;
   return undefined;
 }
 
 function phaseStatus(): PhaseStatusResponse {
   return {
-    phase: "phase-1",
-    title: "Cloudflare Foundation and Authentication",
+    phase: "phase-2",
+    title: "Scalable League Management",
     items: [
       {
         key: "cloudflare-resources",
@@ -167,16 +170,16 @@ function phaseStatus(): PhaseStatusResponse {
         summary: "Verification, login, refresh, revocation, and password recovery are available.",
       },
       {
-        key: "desktop-shell",
-        label: "Desktop shell",
+        key: "league-management",
+        label: "League management",
         status: "available",
-        summary: "The Visual Studio WPF client remains runnable during each phase.",
+        summary: "Creation, invitations, memberships, roles, teams, and settings are available.",
       },
       {
-        key: "mobile-shell",
-        label: "Mobile PWA",
+        key: "shard-routing",
+        label: "Shard routing",
         status: "available",
-        summary: "The production PWA is connected to the full authentication lifecycle.",
+        summary: "The core directory resolves each league without exposing shard locations to clients.",
       },
     ],
   };

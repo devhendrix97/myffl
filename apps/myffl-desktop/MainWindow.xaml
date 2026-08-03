@@ -5,6 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
         Title="myFFL" Height="720" Width="1180" MinHeight="640" MinWidth="980"
+        Loaded="Window_Loaded"
         Background="#05080F" FontFamily="Segoe UI">
     <Window.Resources>
         <SolidColorBrush x:Key="PanelBrush" Color="#111827"/>
@@ -19,6 +20,17 @@
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="HorizontalContentAlignment" Value="Left"/>
             <Setter Property="Padding" Value="14,0"/>
+        </Style>
+        <Style x:Key="PrimaryAction" TargetType="Button">
+            <Setter Property="Height" Value="44"/>
+            <Setter Property="MinWidth" Value="150"/>
+            <Setter Property="Padding" Value="18,0"/>
+            <Setter Property="Margin" Value="0,0,10,0"/>
+            <Setter Property="Foreground" Value="#FFFFFF"/>
+            <Setter Property="Background" Value="#1D4ED8"/>
+            <Setter Property="BorderBrush" Value="#3B82F6"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Cursor" Value="Hand"/>
         </Style>
     </Window.Resources>
 
@@ -44,7 +56,7 @@
                     </TextBlock>
                     <TextBlock Text="Desktop Command Center" Foreground="{StaticResource MutedTextBrush}" Margin="0,2,0,28"/>
                     <Button Style="{StaticResource NavButton}" Content="Home"/>
-                    <Button Style="{StaticResource NavButton}" Content="Leagues"/>
+                    <Button Style="{StaticResource NavButton}" Content="Leagues" Click="OpenLeagues_Click"/>
                     <Button Style="{StaticResource NavButton}" Content="My Team"/>
                     <Button Style="{StaticResource NavButton}" Content="Players"/>
                     <Button Style="{StaticResource NavButton}" Content="Matchups"/>
@@ -52,8 +64,8 @@
                 </StackPanel>
                 <Border DockPanel.Dock="Bottom" BorderBrush="#1D4ED8" BorderThickness="1" Padding="12" Background="#0B1220">
                     <StackPanel>
-                        <TextBlock Text="API" Foreground="#60A5FA" FontWeight="Bold"/>
-                        <TextBlock Text="http://localhost:8787" Foreground="{StaticResource MutedTextBrush}" FontSize="12"/>
+                        <TextBlock Text="PRODUCTION API" Foreground="#60A5FA" FontWeight="Bold" FontSize="11"/>
+                        <TextBlock x:Name="ApiStatusText" Text="Checking connection..." Foreground="{StaticResource MutedTextBrush}" FontSize="12" Margin="0,4,0,0"/>
                     </StackPanel>
                 </Border>
             </DockPanel>
@@ -61,33 +73,38 @@
 
         <ScrollViewer Grid.Column="1" Padding="28">
             <StackPanel>
-                <TextBlock Text="Phase 1" Foreground="#60A5FA" FontWeight="Bold" FontSize="14"/>
-                <TextBlock Text="Build the league before the season starts." Foreground="#FFFFFF"
+                <TextBlock Text="PHASE 2 - LEAGUE MANAGEMENT" Foreground="#60A5FA" FontWeight="Bold" FontSize="14"/>
+                <TextBlock Text="Your league command center is online." Foreground="#FFFFFF"
                            FontSize="38" FontWeight="Bold" Margin="0,8,0,10"/>
-                <TextBlock Text="Registration, login, league creation, scoring, and gameday views will come online phase by phase."
+                <TextBlock Text="Create leagues, invite managers, define rosters and schedules, and manage commissioner settings through the shared myFFL platform."
                            Foreground="{StaticResource MutedTextBrush}" FontSize="16" Width="690" HorizontalAlignment="Left"
-                           TextWrapping="Wrap" Margin="0,0,0,26"/>
+                           TextWrapping="Wrap" Margin="0,0,0,18"/>
+
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,26">
+                    <Button Style="{StaticResource PrimaryAction}" Content="Create League" Click="CreateLeague_Click"/>
+                    <Button Style="{StaticResource PrimaryAction}" Content="Join League" Background="#111827" BorderBrush="#64748B" Click="JoinLeague_Click"/>
+                </StackPanel>
 
                 <UniformGrid Columns="3" Rows="1" Margin="0,0,0,18">
                     <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource PanelBorderBrush}" BorderThickness="1" Padding="18" Margin="0,0,12,0">
                         <StackPanel>
-                            <TextBlock Text="Cloudflare" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
-                            <TextBlock Text="D1, R2, Queues, Pages, Email" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
+                            <TextBlock Text="League Directory" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
+                            <TextBlock Text="Shard-aware league routing" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
                             <TextBlock Text="Available" Foreground="#22C55E" FontWeight="Bold" Margin="0,18,0,0"/>
                         </StackPanel>
                     </Border>
                     <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource PanelBorderBrush}" BorderThickness="1" Padding="18" Margin="0,0,12,0">
                         <StackPanel>
-                            <TextBlock Text="Authentication" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
-                            <TextBlock Text="Verification, sessions, and recovery" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
+                            <TextBlock Text="Invitations" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
+                            <TextBlock Text="Private codes and memberships" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
                             <TextBlock Text="Available" Foreground="#22C55E" FontWeight="Bold" Margin="0,18,0,0"/>
                         </StackPanel>
                     </Border>
                     <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource PanelBorderBrush}" BorderThickness="1" Padding="18">
                         <StackPanel>
-                            <TextBlock Text="League Hub" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
-                            <TextBlock Text="Commissioner controls next" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
-                            <TextBlock Text="Planned" Foreground="#D1D5DB" FontWeight="Bold" Margin="0,18,0,0"/>
+                            <TextBlock Text="Commissioner Controls" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
+                            <TextBlock Text="Rosters, schedules, revisions" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
+                            <TextBlock Text="Available" Foreground="#22C55E" FontWeight="Bold" Margin="0,18,0,0"/>
                         </StackPanel>
                     </Border>
                 </UniformGrid>
@@ -95,11 +112,11 @@
                 <Border Background="#0B1220" BorderBrush="#334155" BorderThickness="1" Padding="20">
                     <StackPanel>
                         <TextBlock Text="Implementation Status" Foreground="#FFFFFF" FontWeight="Bold" FontSize="20"/>
-                        <TextBlock Text="This shell is intentionally runnable while deeper fantasy workflows are built behind the same API contracts."
+                        <TextBlock Text="The desktop project remains runnable after every phase. League actions open the production workspace while native WPF workflows continue to expand."
                                    Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,8,0,16"/>
                         <StackPanel>
                             <TextBlock Text="- Authentication lifecycle: available" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
-                            <TextBlock Text="- League management: planned for Phase 2" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
+                            <TextBlock Text="- League management: available" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
                             <TextBlock Text="- Custom scoring editor: planned for Phase 3" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
                             <TextBlock Text="- ESPN synchronization: planned for Phase 4" Foreground="{StaticResource MutedTextBrush}"/>
                         </StackPanel>
