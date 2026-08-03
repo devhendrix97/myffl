@@ -7,16 +7,19 @@
     "dev": "wrangler dev --local --port 8787",
     "deploy": "wrangler deploy --env production",
     "dry-run": "wrangler deploy --dry-run --env production",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit",
     "types": "wrangler types src/worker-configuration.d.ts"
   },
   "dependencies": {
-    "@myffl/api-contracts": "workspace:*"
+    "@myffl/api-contracts": "workspace:*",
+    "jose": "^6.1.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "typescript": "^5.9.2",
+    "vitest": "^3.2.4",
     "wrangler": "latest"
   }
 }

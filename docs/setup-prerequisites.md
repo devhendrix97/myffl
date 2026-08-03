@@ -27,12 +27,12 @@ Durable Object classes and Workflows are declared by Worker configuration and de
 
 Current Cloudflare state is tracked in `infrastructure/cloudflare/resource-state.json`.
 
-## Action Required In Cloudflare
+## Cloudflare Status
 
-Before the remaining resources can be completed:
-
-1. Confirm the Email Sending DNS records for `myfflapp.com` show as verified in Cloudflare.
-2. Keep the Workers Paid plan enabled so transactional Email Sending remains available.
+- `api.myfflapp.com` is active on the production Worker.
+- `app.myfflapp.com` is active on the Pages project with SSL.
+- Email Sending is enabled and its SPF, DKIM, and DMARC records resolve publicly.
+- Keep the Workers Paid plan enabled so transactional Email Sending remains available.
 
 ## Secrets
 
@@ -43,6 +43,15 @@ pnpm run secrets:generate
 ```
 
 This creates `secrets/myffl-secrets.local.env`, which is ignored by git. Production secrets should be set with Wrangler secret commands after the Worker API exists.
+
+The current secret names are:
+
+- `ACCESS_TOKEN_SIGNING_SECRET`
+- `REFRESH_TOKEN_HASHING_SECRET`
+- `PASSWORD_RESET_SECRET`
+- `EMAIL_VERIFICATION_SECRET`
+
+The generated values remain in `secrets/myffl-secrets.local.env`; do not commit or paste them into issues or chat.
 
 ## Cloudflare Email Service
 

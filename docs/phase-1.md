@@ -26,8 +26,17 @@ Open `myFFL.slnx` in Visual Studio and run either WPF project.
 
 - `GET /health`
 - `GET /phase-status`
+- `GET /auth/me`
 - `POST /auth/register`
+- `POST /auth/verify-email`
+- `POST /auth/resend-verification`
 - `POST /auth/login`
+- `POST /auth/refresh`
+- `POST /auth/logout`
+- `POST /auth/forgot-password`
+- `POST /auth/reset-password`
+
+Browser sessions use a short-lived signed access token plus a rotating refresh token in an HttpOnly cookie. Native clients can request the refresh token in the response by setting `clientType` to `native`.
 
 ## Database Migrations
 
@@ -51,17 +60,21 @@ pnpm --dir workers/api exec wrangler d1 migrations apply myffl-leagues-001 --rem
 
 - Worker API: `myffl-api-production`
 - Worker API custom domain: `https://api.myfflapp.com`
-- Worker version: `4ebf7879-2b43-4acd-82d3-0a453f7c4be1`
 - Pages project: `myffl-mobile`
-- Pages deployment: `https://c6827128.myffl-mobile-bgq.pages.dev`
+- Pages custom domain: `https://app.myfflapp.com`
 
-Cloudflare accepted the Worker custom domain, but this machine did not resolve `api.myfflapp.com` immediately after deployment. If it still does not resolve in Cloudflare, open **Workers & Pages > myffl-api-production > Settings > Domains & Routes** and verify `api.myfflapp.com` is active.
+Both production custom domains are active with SSL. Deployment-specific version identifiers remain available in the Cloudflare dashboard and Wrangler deployment history.
 
-## Not Complete Yet
+## Phase 1 Complete
 
-- Email verification token flow.
-- Refresh-token rotation endpoint.
-- Session revocation UI.
-- League creation.
-- Scoring editor.
-- ESPN synchronization.
+- Account registration and transactional verification email.
+- Verified-account login and authenticated user lookup.
+- Signed access tokens and rotating refresh sessions.
+- Logout, session revocation, and refresh-token reuse handling.
+- Forgot-password and single-use password reset links.
+- Responsive PWA account screens and authenticated shell.
+- Cloudflare-native rate limiting on public authentication actions.
+
+## Next Phase
+
+Phase 2 adds league creation, league membership, invitations, and commissioner configuration.

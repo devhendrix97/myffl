@@ -7,7 +7,7 @@
     "name": "myfflapp.com",
     "cloudflare_zone_status": "found",
     "zone_id": "d3dbc91bb61d7caf2d78e827e4fa776e",
-    "action_required": "Confirm Email Sending DNS records are present and verified in Cloudflare."
+    "action_required": null
   },
   "d1_databases": {
     "CORE_DB": {
@@ -34,14 +34,18 @@
     "project_name": "myffl-mobile",
     "production_branch": "main",
     "pages_dev_url": "https://myffl-mobile-bgq.pages.dev/",
-    "latest_deployment_url": "https://c6827128.myffl-mobile-bgq.pages.dev"
+    "latest_deployment_url": "https://08f89415.myffl-mobile-bgq.pages.dev",
+    "custom_domain": "https://app.myfflapp.com",
+    "custom_domain_status": "active"
   },
   "workers": {
     "api": {
       "name": "myffl-api-production",
       "custom_domain": "api.myfflapp.com",
-      "latest_version_id": "4ebf7879-2b43-4acd-82d3-0a453f7c4be1",
-      "dns_status": "custom domain deployed; local resolver did not resolve immediately after deployment"
+      "latest_version_id": "86260eb7-6570-451f-8b70-8ea67cd677b3",
+      "dns_status": "active",
+      "health_status": "healthy",
+      "application_version": "0.2.0"
     }
   },
   "r2_buckets": {
@@ -52,7 +56,7 @@
     ]
   },
   "email_sending": {
-    "status": "enabled",
+    "status": "enabled_and_dns_verified",
     "domain": "myfflapp.com",
     "tag": "0a661d51650649d68f52d4f3169cc645",
     "from": "noreply@myfflapp.com"

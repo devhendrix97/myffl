@@ -79,8 +79,8 @@
                     <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource PanelBorderBrush}" BorderThickness="1" Padding="18" Margin="0,0,12,0">
                         <StackPanel>
                             <TextBlock Text="Authentication" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
-                            <TextBlock Text="Register and login API shell" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
-                            <TextBlock Text="In progress" Foreground="#60A5FA" FontWeight="Bold" Margin="0,18,0,0"/>
+                            <TextBlock Text="Verification, sessions, and recovery" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
+                            <TextBlock Text="Available" Foreground="#22C55E" FontWeight="Bold" Margin="0,18,0,0"/>
                         </StackPanel>
                     </Border>
                     <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource PanelBorderBrush}" BorderThickness="1" Padding="18">
@@ -98,7 +98,7 @@
                         <TextBlock Text="This shell is intentionally runnable while deeper fantasy workflows are built behind the same API contracts."
                                    Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,8,0,16"/>
                         <StackPanel>
-                            <TextBlock Text="- Registration and login endpoints: in progress" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
+                            <TextBlock Text="- Authentication lifecycle: available" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
                             <TextBlock Text="- League management: planned for Phase 2" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
                             <TextBlock Text="- Custom scoring editor: planned for Phase 3" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
                             <TextBlock Text="- ESPN synchronization: planned for Phase 4" Foreground="{StaticResource MutedTextBrush}"/>

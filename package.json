@@ -5,6 +5,7 @@
   "packageManager": "pnpm@11.9.0",
   "scripts": {
     "build": "pnpm -r build",
+    "test": "pnpm --filter @myffl/api test",
     "typecheck": "pnpm -r typecheck",
     "dev:api": "pnpm --filter @myffl/api dev",
     "dev:mobile": "pnpm --filter @myffl/mobile dev",

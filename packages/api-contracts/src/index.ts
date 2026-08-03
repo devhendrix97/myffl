@@ -47,17 +47,61 @@ export interface RegisterRequest {
   passwordConfirmation: string;
 }
 
+export type AuthClientType = "browser" | "native";
+
 export interface LoginRequest {
   email: string;
   password: string;
+  clientType?: AuthClientType;
 }
 
-export interface AuthSessionResponse {
+export interface RegistrationResponse {
+  userId: string;
+  email: string;
+  verificationRequired: true;
+  emailDeliveryStatus: "sent" | "deferred";
+}
+
+export interface EmailAddressRequest {
+  email: string;
+}
+
+export interface TokenRequest {
+  token: string;
+}
+
+export interface RefreshSessionRequest {
+  refreshToken?: string;
+  clientType?: AuthClientType;
+}
+
+export interface LogoutRequest {
+  refreshToken?: string;
+}
+
+export interface ResetPasswordRequest {
+  token: string;
+  password: string;
+  passwordConfirmation: string;
+}
+
+export interface AuthUser {
   userId: string;
   displayName: string;
   email: string;
+  emailVerified: boolean;
+}
+
+export interface AuthSessionResponse extends AuthUser {
   accessToken: string;
-  refreshToken: string;
+  refreshToken?: string;
   accessTokenExpiresAtUtc: string;
 }
 
+export interface MessageResponse {
+  message: string;
+}
+
+export interface VerifyEmailResponse extends AuthUser {
+  verified: true;
+}
