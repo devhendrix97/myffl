@@ -131,7 +131,14 @@ async function simulationDashboard(env: Env): Promise<unknown> {
     ]);
     events = eventRows.results; games = gameRows.results; players = playerRows.results;
   }
-  return { scenario: { id: "demo-live-game", name: "Sunday Game Simulation", frameCount: replayFrames.length }, runs: runs.results, active, events, games, players };
+  return {
+    scenario: { id: "demo-live-game", name: "Sunday Game Simulation", frameCount: replayFrames.length },
+    runs: runs.results,
+    active: active ?? null,
+    events,
+    games,
+    players,
+  };
 }
 
 async function createSimulation(env: Env, userId: string, requestedSpeed?: number): Promise<unknown> {

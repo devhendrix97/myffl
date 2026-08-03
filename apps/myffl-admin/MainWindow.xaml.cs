@@ -104,12 +104,21 @@ public partial class MainWindow : Window
     private async Task RefreshSimulationAsync()
     {
         var data = await SendAsync(HttpMethod.Get, "/api/admin/simulations");
-        var runs = data.GetProperty("runs");
+        var runs = data.TryGetProperty("runs", out var runRows) ? runRows : default;
+        if (runs.ValueKind != JsonValueKind.Array)
+        {
+            SimulationStatusText.Text = "No test run loaded.";
+            GamesGrid.ItemsSource = null;
+            return;
+        }
         if (_runId is null && runs.GetArrayLength() > 0) _runId = runs[0].GetProperty("runId").GetString();
-        SimulationStatusText.Text = data.GetProperty("active").ValueKind == JsonValueKind.Null
+        var active = data.TryGetProperty("active", out var activeRun) ? activeRun : default;
+        SimulationStatusText.Text = active.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined
             ? "No test run loaded."
-            : JsonSerializer.Serialize(data.GetProperty("active"), new JsonSerializerOptions { WriteIndented = true });
-        GamesGrid.ItemsSource = JsonRows(data.GetProperty("games"));
+            : JsonSerializer.Serialize(active, new JsonSerializerOptions { WriteIndented = true });
+        GamesGrid.ItemsSource = data.TryGetProperty("games", out var games) && games.ValueKind == JsonValueKind.Array
+            ? JsonRows(games)
+            : null;
     }
 
     private async Task<JsonElement> SendAsync(HttpMethod method, string path, object? body = null, bool authenticated = true)
