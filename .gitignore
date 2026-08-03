@@ -10,6 +10,7 @@ dist/
 build/
 bin/
 obj/
+.vs/
 
 # Cloudflare / local runtime state
 .wrangler/
