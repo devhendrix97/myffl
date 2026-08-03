@@ -20,6 +20,12 @@ function validLeague(): CreateLeagueRequest {
       { slotType: "WR", displayName: "Wide Receiver", count: 2, eligiblePositions: ["WR"], contributesPoints: true },
       { slotType: "BENCH", displayName: "Bench", count: 6, eligiblePositions: ["QB", "RB", "WR", "TE"], contributesPoints: false },
     ],
+    rosterPositionLimits: [
+      { position: "QB", displayName: "Quarterback", minimum: 1, maximum: 3 },
+      { position: "RB", displayName: "Running Back", minimum: 2, maximum: 7 },
+      { position: "WR", displayName: "Wide Receiver", minimum: 2, maximum: 7 },
+      { position: "TE", displayName: "Tight End", minimum: 0, maximum: 3 },
+    ],
     schedule: {
       regularSeasonStartWeek: 1,
       regularSeasonEndWeek: 14,
@@ -65,6 +71,26 @@ describe("league creation validation", () => {
     league.rosterSlots = [{ slotType: "QB", displayName: "QB", count: 1, eligiblePositions: ["QB"], contributesPoints: true }];
     expect(() => validateCreateLeagueRequest(league)).toThrow(
       "Total roster size must be between 5 and 60 players.",
+    );
+  });
+
+  it("rejects position minimums below required starting slots", () => {
+    const league = validLeague();
+    league.rosterPositionLimits = league.rosterPositionLimits.map((limit) =>
+      limit.position === "RB" ? { ...limit, minimum: 1 } : limit,
+    );
+    expect(() => validateCreateLeagueRequest(league)).toThrow(
+      "Running Back minimum cannot be lower than its required starting slots.",
+    );
+  });
+
+  it("rejects position maximums larger than the active roster", () => {
+    const league = validLeague();
+    league.rosterPositionLimits = league.rosterPositionLimits.map((limit) =>
+      limit.position === "QB" ? { ...limit, maximum: 99 } : limit,
+    );
+    expect(() => validateCreateLeagueRequest(league)).toThrow(
+      "Position limits must be between 0 and the 11-player active roster.",
     );
   });
 });

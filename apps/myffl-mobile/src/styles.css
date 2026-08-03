@@ -1614,6 +1614,36 @@ textarea {
 .position-list { overflow: hidden; color: #8f9daf; text-overflow: ellipsis; white-space: nowrap; }
 .roster-row input { width: 72px; height: 36px; justify-self: end; border: 1px solid #41516a; border-radius: 4px; background: #080e17; color: #ffffff; padding: 0 8px; text-align: center; }
 
+.roster-metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 6px 0 25px; border: 1px solid #303c4e; border-radius: 5px; overflow: hidden; }
+.roster-metrics > div { min-height: 68px; display: grid; place-content: center; gap: 3px; border-left: 1px solid #303c4e; text-align: center; }
+.roster-metrics > div:first-child { border-left: 0; }
+.roster-metrics strong { font-size: 18px; line-height: 22px; }
+.roster-metrics span { color: #8390a1; font-size: 9px; font-weight: 700; text-transform: uppercase; }
+.roster-control-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin: 0 0 11px; }
+.roster-control-heading h3 { margin: 0 0 3px; font-size: 14px; line-height: 20px; }
+.roster-control-heading p { max-width: 720px; margin: 0; color: #8996a7; font-size: 10px; line-height: 16px; }
+.roster-control-heading .outline-button { flex: 0 0 auto; }
+.position-limit-heading { margin-top: 28px; }
+.slot-position-control { position: relative; min-width: 0; }
+.slot-position-control summary { overflow: hidden; color: #93a1b3; cursor: pointer; font-size: 11px; list-style: none; text-overflow: ellipsis; white-space: nowrap; }
+.slot-position-control summary::-webkit-details-marker { display: none; }
+.slot-position-control summary::after { content: " edit"; color: #6ea3fa; font-size: 9px; }
+.slot-position-control > div { position: absolute; z-index: 8; top: 25px; left: 0; width: 220px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; border: 1px solid #3d4c61; border-radius: 5px; background: #0a1421; box-shadow: 0 14px 30px rgba(0, 0, 0, 0.42); padding: 12px; }
+.slot-position-control label { display: flex; align-items: center; gap: 5px; color: #c0cad6; font-size: 10px; }
+.slot-position-control input { width: 14px; height: 14px; justify-self: auto; padding: 0; accent-color: #347cf5; }
+.roster-row .custom-slot-name { width: min(100%, 170px); height: 32px; justify-self: start; text-align: left; }
+.custom-slot-controls { grid-column: 1 / -1; display: flex; align-items: center; justify-content: flex-end; gap: 10px; border-top: 1px dashed #2c3748; padding-top: 6px; }
+.custom-slot-controls .toggle-row { min-height: 34px; }
+.custom-slot-controls .icon-button { width: 34px; height: 34px; }
+
+.position-limit-table { border: 1px solid #303c4e; border-radius: 5px; overflow: hidden; }
+.position-limit-row { min-height: 52px; display: grid; grid-template-columns: minmax(160px, 1fr) 150px 100px 100px; align-items: center; gap: 12px; border-top: 1px solid #273243; padding: 7px 12px; color: #c6cfda; font-size: 11px; }
+.position-limit-row:first-child { border-top: 0; }
+.position-limit-header { min-height: 36px; background: #101925; color: #7f8c9d; font-size: 9px; font-weight: 800; text-transform: uppercase; }
+.position-limit-row > span:first-child { display: grid; }
+.position-limit-row small { color: #798697; font-size: 9px; }
+.position-limit-row input { width: 78px; height: 36px; justify-self: start; border: 1px solid #41516a; border-radius: 4px; background: #080e17; color: #ffffff; padding: 0 8px; text-align: center; }
+
 .toggle-list { display: grid; gap: 1px; margin-top: 25px; border-top: 1px solid #2c3748; border-bottom: 1px solid #2c3748; }
 
 .toggle-row {
@@ -1977,8 +2007,20 @@ textarea {
   .field.wide { grid-column: auto; }
   .scoring-options { grid-template-columns: 1fr; }
   .roster-row { grid-template-columns: minmax(125px, 1fr) 64px; }
-  .roster-row > .position-list,
   .roster-header > span:nth-child(2) { display: none; }
+  .roster-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .roster-metrics > div { border-top: 1px solid #303c4e; }
+  .roster-metrics > div:nth-child(odd) { border-left: 0; }
+  .roster-metrics > div:nth-child(-n+2) { border-top: 0; }
+  .roster-metrics > div:last-child { grid-column: 1 / -1; }
+  .roster-control-heading { align-items: stretch; flex-direction: column; }
+  .roster-control-heading .outline-button { width: 100%; }
+  .roster-row > input { grid-column: 2; grid-row: 1; }
+  .slot-position-control { grid-column: 1 / -1; }
+  .slot-position-control > div { position: static; width: 100%; margin-top: 8px; box-shadow: none; }
+  .position-limit-row { grid-template-columns: minmax(95px, 1fr) 62px 58px 58px; gap: 7px; padding: 7px 8px; }
+  .position-limit-row input { width: 58px; padding: 0 4px; }
+  .position-limit-header { font-size: 8px; }
   .review-list > div { grid-template-columns: 82px minmax(0, 1fr); gap: 12px; }
   .wizard-actions .primary-button,
   .wizard-actions .outline-button { min-width: 0; }

@@ -76,3 +76,9 @@ Open `myFFL.slnx` in Visual Studio to run the WPF desktop and administrator proj
 ## Verification
 
 The Phase 2 smoke scenario covers two authenticated users, league creation, list pagination, invitation joining, settings revision, invitation rotation, archive, and restore. Unit coverage validates league input, roster size, schedule boundaries, team limits, and invitation normalization.
+
+## Roster Configuration Refinement
+
+Roster setup separates five totals so commissioners can see exactly what they are configuring: required starters, bench spots, active-roster capacity, supplemental IR/PUP/taxi capacity, and total team capacity. The complete planned slot catalog includes offense, Superflex, team defense, IDP, reserves, and commissioner-defined custom slots.
+
+Each active-roster position has an explicit minimum and maximum. The minimum cannot be lower than dedicated starting slots, the maximum cannot exceed active-roster capacity, and combined minimums cannot exceed the available roster. These rules are stored per league season and will be enforced by drafting and transaction workflows when those phases begin.

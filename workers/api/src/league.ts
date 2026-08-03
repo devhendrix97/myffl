@@ -13,6 +13,7 @@ import type {
   LeagueScheduleInput,
   LeagueStatus,
   LeagueSummary,
+  RosterPositionLimitInput,
   RosterSlotInput,
   UpdateLeagueSettingsRequest,
 } from "@myffl/api-contracts";
@@ -285,6 +286,7 @@ async function createLeague(
     leagueActivityStatement(db, leagueId, principal.userId, "league.created", `${principal.displayName} created the league.`, nowIso),
   ];
   statements.push(...rosterSlotStatements(db, rosterDefinitionId, body.rosterSlots));
+  statements.push(...rosterPositionLimitStatements(db, rosterDefinitionId, body.rosterPositionLimits));
   await db.batch(statements);
 
   const response = createResponseFromInput(
@@ -321,7 +323,7 @@ async function createLeague(
       ).bind(body.requestId, principal.userId, leagueId, JSON.stringify(response), nowIso),
       env.CORE_DB.prepare(
         `update database_shards
-         set league_count = league_count + 1, schema_version = max(schema_version, 3), updated_at_utc = ?1
+         set league_count = league_count + 1, schema_version = max(schema_version, 4), updated_at_utc = ?1
          where binding_name = ?2`,
       ).bind(nowIso, shard.binding_name),
       coreAuditStatement(env.CORE_DB, principal.userId, "league.created", leagueId, correlationId, nowIso),
@@ -517,8 +519,10 @@ async function updateLeagueSettings(
   if (!roster || !season) throw new ApiException(500, "league_configuration_missing", "League configuration is incomplete.");
 
   await db.batch([
+    db.prepare("delete from roster_position_limits where roster_definition_id = ?1").bind(roster.roster_definition_id),
     db.prepare("delete from roster_slots where roster_definition_id = ?1").bind(roster.roster_definition_id),
     ...rosterSlotStatements(db, roster.roster_definition_id, body.rosterSlots),
+    ...rosterPositionLimitStatements(db, roster.roster_definition_id, body.rosterPositionLimits),
     db.prepare(
       `update roster_definitions set revision_number = revision_number + 1, updated_at_utc = ?1
        where roster_definition_id = ?2`,
@@ -644,7 +648,7 @@ async function getLeagueDetail(
 ): Promise<LeagueDetail> {
   const { db } = await requireLeagueRole(principal, leagueId, env, ["commissioner", "co-commissioner", "manager"]);
   const league = await getLeagueRow(db, leagueId);
-  const [membershipResult, rosterResult, schedule, scoringSetting, activityResult] = await Promise.all([
+  const [membershipResult, rosterResult, rosterLimitResult, schedule, scoringSetting, activityResult] = await Promise.all([
     db.prepare(
       `select members.league_member_id, members.user_id, members.role,
               members.joined_at_utc, teams.fantasy_team_id, teams.team_name
@@ -668,6 +672,17 @@ async function getLeagueDetail(
       slot_count: number;
       eligible_positions_json: string;
       contributes_points: number;
+    }>(),
+    db.prepare(
+      `select limits.position, limits.display_name, limits.minimum_count, limits.maximum_count
+       from roster_position_limits limits
+       join roster_definitions definitions on definitions.roster_definition_id = limits.roster_definition_id
+       where definitions.league_season_id = ?1 order by limits.display_order`,
+    ).bind(league.league_season_id).all<{
+      position: string;
+      display_name: string;
+      minimum_count: number;
+      maximum_count: number;
     }>(),
     db.prepare(
       `select regular_season_start_week, regular_season_end_week, schedule_method,
@@ -736,6 +751,12 @@ async function getLeagueDetail(
       count: slot.slot_count,
       eligiblePositions: JSON.parse(slot.eligible_positions_json) as string[],
       contributesPoints: Boolean(slot.contributes_points),
+    })),
+    rosterPositionLimits: (rosterLimitResult.results ?? []).map((limit) => ({
+      position: limit.position,
+      displayName: limit.display_name,
+      minimum: limit.minimum_count,
+      maximum: limit.maximum_count,
     })),
     schedule: {
       regularSeasonStartWeek: schedule.regular_season_start_week,
@@ -842,10 +863,11 @@ export function validateCreateLeagueRequest(body: CreateLeagueRequest): CreateLe
   const scoringPreset = requireScoringPreset(body.scoringPreset);
   const commissionerTeamName = requireTeamName(body.commissionerTeamName);
   const rosterSlots = validateRosterSlots(body.rosterSlots);
+  const rosterPositionLimits = validateRosterPositionLimits(body.rosterPositionLimits, rosterSlots);
   const schedule = validateSchedule(body.schedule, teamCount);
   return {
     requestId, leagueName, description, privacy, teamCount, seasonYear,
-    timeZone, format, scoringPreset, commissionerTeamName, rosterSlots, schedule,
+    timeZone, format, scoringPreset, commissionerTeamName, rosterSlots, rosterPositionLimits, schedule,
   };
 }
 
@@ -856,6 +878,7 @@ export function validateUpdateLeagueSettingsRequest(
     throw new ApiException(400, "invalid_revision", "A valid league revision is required.");
   }
   const teamCount = requireTeamCount(body.teamCount);
+  const rosterSlots = validateRosterSlots(body.rosterSlots);
   return {
     revisionNumber: body.revisionNumber,
     leagueName: requireLeagueName(body.leagueName),
@@ -863,7 +886,8 @@ export function validateUpdateLeagueSettingsRequest(
     privacy: requirePrivacy(body.privacy),
     timeZone: requireTimeZone(body.timeZone),
     teamCount,
-    rosterSlots: validateRosterSlots(body.rosterSlots),
+    rosterSlots,
+    rosterPositionLimits: validateRosterPositionLimits(body.rosterPositionLimits, rosterSlots),
     schedule: validateSchedule(body.schedule, teamCount),
   };
 }
@@ -968,7 +992,58 @@ function validateRosterSlots(value: unknown): RosterSlotInput[] {
   });
   const total = slots.reduce((sum, slot) => sum + slot.count, 0);
   if (total < 5 || total > 60) throw new ApiException(400, "invalid_roster_size", "Total roster size must be between 5 and 60 players.");
+  const slotTypes = new Set(slots.map((slot) => slot.slotType));
+  if (slotTypes.size !== slots.length) throw new ApiException(400, "duplicate_roster_slot", "Each roster slot type may appear only once.");
+  if (slots.some((slot) => slot.count > 0 && slot.eligiblePositions.length === 0)) {
+    throw new ApiException(400, "invalid_roster_positions", "Every enabled roster slot needs at least one eligible position.");
+  }
+  if (!slots.some((slot) => slot.count > 0 && slot.contributesPoints)) {
+    throw new ApiException(400, "invalid_starting_lineup", "The starting lineup must contain at least one player.");
+  }
   return slots;
+}
+
+function validateRosterPositionLimits(value: unknown, slots: RosterSlotInput[]): RosterPositionLimitInput[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 30) {
+    throw new ApiException(400, "invalid_position_limits", "Add position limits for the active roster.");
+  }
+  const supplementalTypes = new Set(["IR", "PUP", "TAXI"]);
+  const activeRosterSize = slots
+    .filter((slot) => !supplementalTypes.has(slot.slotType))
+    .reduce((sum, slot) => sum + slot.count, 0);
+  const dedicatedStarters = new Map<string, number>();
+  for (const slot of slots) {
+    if (slot.count > 0 && slot.contributesPoints && slot.eligiblePositions.length === 1) {
+      const position = slot.eligiblePositions[0];
+      dedicatedStarters.set(position, (dedicatedStarters.get(position) ?? 0) + slot.count);
+    }
+  }
+  const seen = new Set<string>();
+  const limits = value.map((raw, index) => {
+    const limit = raw as Partial<RosterPositionLimitInput>;
+    const position = requireString(limit.position, `Position limit ${index + 1}`).trim().toUpperCase();
+    const displayName = requireString(limit.displayName, `Position limit ${index + 1} name`).trim();
+    const minimum = Number(limit.minimum);
+    const maximum = Number(limit.maximum);
+    if (!/^[A-Z0-9_-]{1,20}$/.test(position) || displayName.length < 1 || displayName.length > 30 || seen.has(position)) {
+      throw new ApiException(400, "invalid_position_limits", "Position limits must have unique, valid positions.");
+    }
+    if (!Number.isInteger(minimum) || !Number.isInteger(maximum) || minimum < 0 || maximum < minimum || maximum > activeRosterSize) {
+      throw new ApiException(400, "invalid_position_limits", `Position limits must be between 0 and the ${activeRosterSize}-player active roster.`);
+    }
+    if (minimum < (dedicatedStarters.get(position) ?? 0)) {
+      throw new ApiException(400, "position_minimum_too_small", `${displayName} minimum cannot be lower than its required starting slots.`);
+    }
+    seen.add(position);
+    return { position, displayName, minimum, maximum };
+  });
+  if ([...dedicatedStarters.keys()].some((position) => !seen.has(position))) {
+    throw new ApiException(400, "position_limit_missing", "Every required starting position needs an active-roster limit.");
+  }
+  if (limits.reduce((sum, limit) => sum + limit.minimum, 0) > activeRosterSize) {
+    throw new ApiException(400, "position_minimums_exceed_roster", "Position minimums cannot exceed the active roster size.");
+  }
+  return limits;
 }
 
 function validateSchedule(value: unknown, teamCount: number): LeagueScheduleInput {
@@ -1082,7 +1157,7 @@ function rosterSlotStatements(
   rosterDefinitionId: string,
   slots: RosterSlotInput[],
 ): D1PreparedStatement[] {
-  return slots.filter((slot) => slot.count > 0).map((slot, index) => db.prepare(
+  return slots.map((slot, index) => db.prepare(
     `insert into roster_slots (
       roster_slot_id, roster_definition_id, slot_type, display_name, slot_count,
       eligible_positions_json, contributes_points, lock_behavior,
@@ -1092,6 +1167,22 @@ function rosterSlotStatements(
     newId("rss"), rosterDefinitionId, slot.slotType, slot.displayName, slot.count,
     JSON.stringify(slot.eligiblePositions), boolInt(slot.contributesPoints),
     ["IR", "PUP"].includes(slot.slotType) ? "injured" : null, index,
+  ));
+}
+
+function rosterPositionLimitStatements(
+  db: D1Database,
+  rosterDefinitionId: string,
+  limits: RosterPositionLimitInput[],
+): D1PreparedStatement[] {
+  return limits.map((limit, index) => db.prepare(
+    `insert into roster_position_limits (
+      roster_position_limit_id, roster_definition_id, position, display_name,
+      minimum_count, maximum_count, display_order
+    ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+  ).bind(
+    newId("rpl"), rosterDefinitionId, limit.position, limit.displayName,
+    limit.minimum, limit.maximum, index,
   ));
 }
 
@@ -1127,7 +1218,8 @@ function createResponseFromInput(
       commissionerUserId: principal.userId,
       maintenanceMode: false,
       scoringPreset: body.scoringPreset,
-      rosterSlots: body.rosterSlots.filter((slot) => slot.count > 0),
+      rosterSlots: body.rosterSlots,
+      rosterPositionLimits: body.rosterPositionLimits,
       schedule: body.schedule,
       members: [{
         userId: principal.userId,
@@ -1228,6 +1320,7 @@ async function cleanupCreatedLeague(db: D1Database, leagueId: string, seasonId: 
     await db.batch([
       db.prepare("delete from league_activity where league_id = ?1").bind(leagueId),
       db.prepare("delete from league_audit_events where league_id = ?1").bind(leagueId),
+      db.prepare("delete from roster_position_limits where roster_definition_id in (select roster_definition_id from roster_definitions where league_season_id = ?1)").bind(seasonId),
       db.prepare("delete from roster_slots where roster_definition_id in (select roster_definition_id from roster_definitions where league_season_id = ?1)").bind(seasonId),
       db.prepare("delete from roster_definitions where league_season_id = ?1").bind(seasonId),
       db.prepare("delete from schedule_settings where league_season_id = ?1").bind(seasonId),

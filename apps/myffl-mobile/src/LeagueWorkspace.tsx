@@ -11,6 +11,7 @@ import type {
   LeaguePrivacy,
   LeagueScheduleInput,
   LeagueSummary,
+  RosterPositionLimitInput,
   RosterSlotInput,
   ScoringCalculationType,
   ScoringCatalogResponse,
@@ -321,10 +322,29 @@ const initialRosterSlots: RosterSlotInput[] = [
   { slotType: "WR", displayName: "Wide Receiver", count: 2, eligiblePositions: ["WR"], contributesPoints: true },
   { slotType: "TE", displayName: "Tight End", count: 1, eligiblePositions: ["TE"], contributesPoints: true },
   { slotType: "FLEX", displayName: "Flex", count: 1, eligiblePositions: ["RB", "WR", "TE"], contributesPoints: true },
+  { slotType: "SUPERFLEX", displayName: "Superflex", count: 0, eligiblePositions: ["QB", "RB", "WR", "TE"], contributesPoints: true },
   { slotType: "K", displayName: "Kicker", count: 1, eligiblePositions: ["K"], contributesPoints: true },
   { slotType: "DST", displayName: "Defense", count: 1, eligiblePositions: ["DST"], contributesPoints: true },
+  { slotType: "DL", displayName: "Defensive Line", count: 0, eligiblePositions: ["DL"], contributesPoints: true },
+  { slotType: "LB", displayName: "Linebacker", count: 0, eligiblePositions: ["LB"], contributesPoints: true },
+  { slotType: "DB", displayName: "Defensive Back", count: 0, eligiblePositions: ["DB"], contributesPoints: true },
+  { slotType: "IDP_FLEX", displayName: "IDP Flex", count: 0, eligiblePositions: ["DL", "LB", "DB"], contributesPoints: true },
   { slotType: "BENCH", displayName: "Bench", count: 6, eligiblePositions: ["QB", "RB", "WR", "TE", "K", "DST"], contributesPoints: false },
   { slotType: "IR", displayName: "Injured Reserve", count: 2, eligiblePositions: ["QB", "RB", "WR", "TE", "K", "DST"], contributesPoints: false },
+  { slotType: "PUP", displayName: "PUP", count: 0, eligiblePositions: ["QB", "RB", "WR", "TE", "K", "DST"], contributesPoints: false },
+  { slotType: "TAXI", displayName: "Taxi Squad", count: 0, eligiblePositions: ["QB", "RB", "WR", "TE"], contributesPoints: false },
+];
+
+const initialRosterPositionLimits: RosterPositionLimitInput[] = [
+  { position: "QB", displayName: "Quarterback", minimum: 1, maximum: 3 },
+  { position: "RB", displayName: "Running Back", minimum: 2, maximum: 8 },
+  { position: "WR", displayName: "Wide Receiver", minimum: 2, maximum: 8 },
+  { position: "TE", displayName: "Tight End", minimum: 1, maximum: 4 },
+  { position: "K", displayName: "Kicker", minimum: 1, maximum: 3 },
+  { position: "DST", displayName: "Team Defense", minimum: 1, maximum: 3 },
+  { position: "DL", displayName: "Defensive Line", minimum: 0, maximum: 8 },
+  { position: "LB", displayName: "Linebacker", minimum: 0, maximum: 8 },
+  { position: "DB", displayName: "Defensive Back", minimum: 0, maximum: 8 },
 ];
 
 const initialSchedule: LeagueScheduleInput = {
@@ -352,6 +372,7 @@ function defaultLeagueDraft(): CreateLeagueRequest {
     scoringPreset: "full-ppr",
     commissionerTeamName: "",
     rosterSlots: initialRosterSlots.map((slot) => ({ ...slot, eligiblePositions: [...slot.eligiblePositions] })),
+    rosterPositionLimits: initialRosterPositionLimits.map((limit) => ({ ...limit })),
     schedule: { ...initialSchedule },
   };
 }
@@ -427,7 +448,7 @@ function CreateLeagueWizard({
       <section className="wizard-content">
         {step === 0 && <BasicsStep draft={draft} update={update} />}
         {step === 1 && <FormatStep draft={draft} update={update} />}
-        {step === 2 && <RosterStep slots={draft.rosterSlots} onChange={(rosterSlots) => update("rosterSlots", rosterSlots)} />}
+        {step === 2 && <RosterStep slots={draft.rosterSlots} limits={draft.rosterPositionLimits} onSlotsChange={(rosterSlots) => update("rosterSlots", rosterSlots)} onLimitsChange={(rosterPositionLimits) => update("rosterPositionLimits", rosterPositionLimits)} />}
         {step === 3 && <ScheduleStep schedule={draft.schedule} teamCount={draft.teamCount} onChange={(schedule) => update("schedule", schedule)} />}
         {step === 4 && <ReviewStep draft={draft} />}
       </section>
@@ -521,23 +542,78 @@ function FormatStep({
   );
 }
 
-function RosterStep({ slots, onChange }: { slots: RosterSlotInput[]; onChange: (slots: RosterSlotInput[]) => void }) {
-  const total = slots.reduce((sum, slot) => sum + slot.count, 0);
+function RosterStep({
+  slots,
+  limits,
+  onSlotsChange,
+  onLimitsChange,
+}: {
+  slots: RosterSlotInput[];
+  limits: RosterPositionLimitInput[];
+  onSlotsChange: (slots: RosterSlotInput[]) => void;
+  onLimitsChange: (limits: RosterPositionLimitInput[]) => void;
+}) {
+  const supplementalTypes = new Set(["IR", "PUP", "TAXI"]);
+  const lineupSize = slots.filter((slot) => slot.contributesPoints).reduce((sum, slot) => sum + slot.count, 0);
+  const activeRosterSize = slots.filter((slot) => !supplementalTypes.has(slot.slotType)).reduce((sum, slot) => sum + slot.count, 0);
+  const supplementalSize = slots.filter((slot) => supplementalTypes.has(slot.slotType)).reduce((sum, slot) => sum + slot.count, 0);
+  const benchSize = activeRosterSize - lineupSize;
   function setCount(index: number, count: number) {
-    onChange(slots.map((slot, slotIndex) => slotIndex === index ? { ...slot, count: Math.max(0, Math.min(20, count)) } : slot));
+    const previous = slots[index];
+    const nextCount = Math.max(0, Math.min(20, count));
+    onSlotsChange(slots.map((slot, slotIndex) => slotIndex === index ? { ...slot, count: nextCount } : slot));
+    if (previous.contributesPoints && previous.eligiblePositions.length === 1) {
+      const position = previous.eligiblePositions[0];
+      onLimitsChange(limits.map((limit) => limit.position === position && limit.minimum === previous.count
+        ? { ...limit, minimum: nextCount, maximum: Math.max(limit.maximum, nextCount) }
+        : limit));
+    }
+  }
+  function updateSlot(index: number, update: Partial<RosterSlotInput>) {
+    onSlotsChange(slots.map((slot, slotIndex) => slotIndex === index ? { ...slot, ...update } : slot));
+  }
+  function updateLimit(index: number, update: Partial<RosterPositionLimitInput>) {
+    onLimitsChange(limits.map((limit, limitIndex) => limitIndex === index ? { ...limit, ...update } : limit));
+  }
+  function addCustomSlot() {
+    const number = slots.filter((slot) => slot.slotType.startsWith("CUSTOM_")).length + 1;
+    onSlotsChange([...slots, {
+      slotType: `CUSTOM_${number}`,
+      displayName: `Custom Slot ${number}`,
+      count: 1,
+      eligiblePositions: ["RB", "WR", "TE"],
+      contributesPoints: true,
+    }]);
   }
   return (
     <div className="wizard-step">
-      <StepHeading icon={<ListChecks size={22} />} title="Roster shape" subtitle={`${total} total players per team. Set unused slots to zero.`} />
+      <StepHeading icon={<ListChecks size={22} />} title="Roster and lineup" subtitle="Set required starters, active-roster capacity, supplemental reserves, and position limits." />
+      <div className="roster-metrics">
+        <div><strong>{lineupSize}</strong><span>Starting lineup</span></div>
+        <div><strong>{benchSize}</strong><span>Bench spots</span></div>
+        <div><strong>{activeRosterSize}</strong><span>Active roster</span></div>
+        <div><strong>{supplementalSize}</strong><span>IR / PUP / taxi</span></div>
+        <div><strong>{activeRosterSize + supplementalSize}</strong><span>Total capacity</span></div>
+      </div>
+      <div className="roster-control-heading"><div><h3>Lineup and reserve slots</h3><p>Starting slots must be filled for a complete lineup. Bench spots count toward the active roster; IR, PUP, and taxi spots do not.</p></div><button className="outline-button compact" type="button" onClick={addCustomSlot}><Plus size={16} /> Custom slot</button></div>
       <div className="roster-table" role="table" aria-label="Roster slot configuration">
-        <div className="roster-row roster-header" role="row"><span>Slot</span><span>Eligible</span><span>Count</span></div>
+        <div className="roster-row roster-header" role="row"><span>Slot</span><span>Eligible positions</span><span>Count</span></div>
         {slots.map((slot, index) => (
           <div className="roster-row" role="row" key={slot.slotType}>
-            <span><strong>{slot.displayName}</strong><small>{slot.contributesPoints ? "Starter" : "Reserve"}</small></span>
-            <span className="position-list">{slot.eligiblePositions.join(" / ")}</span>
+            <span>{slot.slotType.startsWith("CUSTOM_") ? <input className="custom-slot-name" aria-label={`${slot.displayName} name`} value={slot.displayName} onChange={(event) => updateSlot(index, { displayName: event.target.value })} /> : <strong>{slot.displayName}</strong>}<small>{slot.contributesPoints ? "Required starter" : supplementalTypes.has(slot.slotType) ? "Supplemental reserve" : "Active reserve"}</small></span>
+            <details className="slot-position-control"><summary>{slot.eligiblePositions.join(" / ") || "Choose positions"}</summary><div>{rosterPositions.map((position) => <label key={position}><input type="checkbox" checked={slot.eligiblePositions.includes(position)} onChange={(event) => updateSlot(index, { eligiblePositions: event.target.checked ? [...slot.eligiblePositions, position] : slot.eligiblePositions.filter((item) => item !== position) })} />{position}</label>)}</div></details>
             <input aria-label={`${slot.displayName} count`} type="number" min={0} max={20} value={slot.count} onChange={(event) => setCount(index, Number(event.target.value))} />
+            {slot.slotType.startsWith("CUSTOM_") && <div className="custom-slot-controls"><Toggle label="Counts in the starting lineup" checked={slot.contributesPoints} onChange={(contributesPoints) => updateSlot(index, { contributesPoints })} /><button className="icon-button" type="button" onClick={() => onSlotsChange(slots.filter((_, slotIndex) => slotIndex !== index))} aria-label={`Remove ${slot.displayName}`}><X size={16} /></button></div>}
           </div>
         ))}
+      </div>
+      <div className="roster-control-heading position-limit-heading"><div><h3>Active-roster position limits</h3><p>The minimum is how many players at that position each team must carry. The maximum caps drafting, adds, waivers, and trades.</p></div></div>
+      <div className="position-limit-table" role="table" aria-label="Active roster position limits">
+        <div className="position-limit-row position-limit-header" role="row"><span>Position</span><span>Required starters</span><span>Minimum</span><span>Maximum</span></div>
+        {limits.map((limit, index) => {
+          const required = slots.filter((slot) => slot.contributesPoints && slot.eligiblePositions.length === 1 && slot.eligiblePositions[0] === limit.position).reduce((sum, slot) => sum + slot.count, 0);
+          return <div className="position-limit-row" role="row" key={limit.position}><span><strong>{limit.position}</strong><small>{limit.displayName}</small></span><span>{required}</span><input aria-label={`${limit.displayName} minimum`} type="number" min={required} max={activeRosterSize} value={limit.minimum} onChange={(event) => updateLimit(index, { minimum: Number(event.target.value), maximum: Math.max(limit.maximum, Number(event.target.value)) })} /><input aria-label={`${limit.displayName} maximum`} type="number" min={limit.minimum} max={activeRosterSize} value={limit.maximum} onChange={(event) => updateLimit(index, { maximum: Number(event.target.value) })} /></div>;
+        })}
       </div>
     </div>
   );
@@ -568,7 +644,9 @@ function ScheduleStep({ schedule, teamCount, onChange }: { schedule: LeagueSched
 }
 
 function ReviewStep({ draft }: { draft: CreateLeagueRequest }) {
-  const rosterSize = draft.rosterSlots.reduce((sum, slot) => sum + slot.count, 0);
+  const supplemental = new Set(["IR", "PUP", "TAXI"]);
+  const activeRosterSize = draft.rosterSlots.filter((slot) => !supplemental.has(slot.slotType)).reduce((sum, slot) => sum + slot.count, 0);
+  const lineupSize = draft.rosterSlots.filter((slot) => slot.contributesPoints).reduce((sum, slot) => sum + slot.count, 0);
   return (
     <div className="wizard-step">
       <StepHeading icon={<Clipboard size={22} />} title="Review league" subtitle="These settings can be revised later by a commissioner." />
@@ -576,7 +654,7 @@ function ReviewStep({ draft }: { draft: CreateLeagueRequest }) {
         <ReviewRow label="League" value={draft.leagueName} detail={`${draft.privacy} - ${draft.teamCount} teams - ${draft.seasonYear}`} />
         <ReviewRow label="Format" value={formatLabel(draft.format)} detail={presetLabel(draft.scoringPreset)} />
         <ReviewRow label="Your team" value={draft.commissionerTeamName} detail="Commissioner" />
-        <ReviewRow label="Roster" value={`${rosterSize} players`} detail={draft.rosterSlots.filter((slot) => slot.count > 0).map((slot) => `${slot.count} ${slot.slotType}`).join(" - ")} />
+        <ReviewRow label="Roster" value={`${lineupSize} starters / ${activeRosterSize} active`} detail={draft.rosterSlots.filter((slot) => slot.count > 0).map((slot) => `${slot.count} ${slot.slotType}`).join(" - ")} />
         <ReviewRow label="Schedule" value={`Weeks ${draft.schedule.regularSeasonStartWeek}-${draft.schedule.regularSeasonEndWeek}`} detail={`${draft.schedule.playoffTeamCount}-team playoffs begin Week ${draft.schedule.playoffStartWeek}`} />
       </div>
     </div>
@@ -1108,7 +1186,7 @@ function SettingsView({
           <Field label="Time zone"><select value={form.timeZone} onChange={(event) => setForm({ ...form, timeZone: event.target.value })}>{timeZones.map((zone) => <option key={zone}>{zone}</option>)}</select></Field>
         </div>
         <h3 className="control-heading">Roster slots</h3>
-        <RosterStep slots={form.rosterSlots} onChange={(rosterSlots) => setForm({ ...form, rosterSlots })} />
+        <RosterStep slots={form.rosterSlots} limits={form.rosterPositionLimits} onSlotsChange={(rosterSlots) => setForm({ ...form, rosterSlots })} onLimitsChange={(rosterPositionLimits) => setForm({ ...form, rosterPositionLimits })} />
         <h3 className="control-heading">Schedule</h3>
         <ScheduleStep schedule={form.schedule} teamCount={form.teamCount} onChange={(schedule) => setForm({ ...form, schedule })} />
         <div className="settings-actions"><button className="outline-button" type="button" onClick={() => setEditing(false)}>Cancel</button><button className="primary-button" type="submit" disabled={busy}>{busy ? <LoaderCircle className="spin" size={18} /> : <Save size={18} />} Save changes</button></div>
@@ -1127,7 +1205,8 @@ function SettingsView({
           <div><dt>Scoring</dt><dd>{presetLabel(league.scoringPreset)}</dd></div>
           <div><dt>Regular season</dt><dd>Weeks {league.schedule.regularSeasonStartWeek}-{league.schedule.regularSeasonEndWeek}</dd></div>
           <div><dt>Playoffs</dt><dd>{league.schedule.playoffTeamCount} teams - Week {league.schedule.playoffStartWeek}</dd></div>
-          <div><dt>Roster</dt><dd>{league.rosterSlots.reduce((sum, slot) => sum + slot.count, 0)} players</dd></div>
+          <div><dt>Starting lineup</dt><dd>{league.rosterSlots.filter((slot) => slot.contributesPoints).reduce((sum, slot) => sum + slot.count, 0)} players</dd></div>
+          <div><dt>Active roster</dt><dd>{league.rosterSlots.filter((slot) => !["IR", "PUP", "TAXI"].includes(slot.slotType)).reduce((sum, slot) => sum + slot.count, 0)} players</dd></div>
           <div><dt>Revision</dt><dd>{league.revisionNumber}</dd></div>
         </dl>
       </section>
@@ -1193,6 +1272,10 @@ function validateWizardStep(step: number, draft: CreateLeagueRequest): string {
   if (step === 2) {
     const size = draft.rosterSlots.reduce((sum, slot) => sum + slot.count, 0);
     if (size < 5 || size > 60) return "Total roster size must be between 5 and 60 players.";
+    if (!draft.rosterSlots.some((slot) => slot.count > 0 && slot.contributesPoints)) return "Add at least one starting lineup slot.";
+    if (draft.rosterSlots.some((slot) => slot.count > 0 && slot.eligiblePositions.length === 0)) return "Choose eligible positions for every enabled roster slot.";
+    const activeSize = draft.rosterSlots.filter((slot) => !["IR", "PUP", "TAXI"].includes(slot.slotType)).reduce((sum, slot) => sum + slot.count, 0);
+    if (draft.rosterPositionLimits.some((limit) => limit.minimum < 0 || limit.maximum < limit.minimum || limit.maximum > activeSize)) return "Position minimums and maximums must fit within the active roster.";
   }
   if (step === 3) {
     if (draft.schedule.playoffStartWeek <= draft.schedule.regularSeasonEndWeek) return "Playoffs must begin after the regular season ends.";
@@ -1219,6 +1302,11 @@ function detailToSummary(league: LeagueDetail): LeagueSummary {
 }
 
 function detailToSettings(league: LeagueDetail): UpdateLeagueSettingsRequest {
+  const configuredSlots = new Map(league.rosterSlots.map((slot) => [slot.slotType, slot]));
+  const rosterSlots = [
+    ...initialRosterSlots.map((defaultSlot) => configuredSlots.get(defaultSlot.slotType) ?? defaultSlot),
+    ...league.rosterSlots.filter((slot) => !initialRosterSlots.some((defaultSlot) => defaultSlot.slotType === slot.slotType)),
+  ];
   return {
     revisionNumber: league.revisionNumber,
     leagueName: league.leagueName,
@@ -1226,7 +1314,8 @@ function detailToSettings(league: LeagueDetail): UpdateLeagueSettingsRequest {
     privacy: league.privacy,
     timeZone: league.timeZone,
     teamCount: league.maxTeams,
-    rosterSlots: league.rosterSlots.map((slot) => ({ ...slot, eligiblePositions: [...slot.eligiblePositions] })),
+    rosterSlots: rosterSlots.map((slot) => ({ ...slot, eligiblePositions: [...slot.eligiblePositions] })),
+    rosterPositionLimits: league.rosterPositionLimits.map((limit) => ({ ...limit })),
     schedule: { ...league.schedule },
   };
 }
@@ -1264,6 +1353,8 @@ function formatInvitationInput(value: string): string {
   const normalized = value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10);
   return normalized.length > 5 ? `${normalized.slice(0, 5)}-${normalized.slice(5)}` : normalized;
 }
+
+const rosterPositions = ["QB", "RB", "WR", "TE", "K", "DST", "DL", "LB", "DB"];
 
 const timeZones = [
   "America/New_York",

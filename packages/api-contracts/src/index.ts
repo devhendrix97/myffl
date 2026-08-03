@@ -137,6 +137,13 @@ export interface RosterSlotInput {
   contributesPoints: boolean;
 }
 
+export interface RosterPositionLimitInput {
+  position: string;
+  displayName: string;
+  minimum: number;
+  maximum: number;
+}
+
 export interface LeagueScheduleInput {
   regularSeasonStartWeek: number;
   regularSeasonEndWeek: number;
@@ -161,6 +168,7 @@ export interface CreateLeagueRequest {
   scoringPreset: ScoringPresetKey;
   commissionerTeamName: string;
   rosterSlots: RosterSlotInput[];
+  rosterPositionLimits: RosterPositionLimitInput[];
   schedule: LeagueScheduleInput;
 }
 
@@ -201,6 +209,7 @@ export interface LeagueDetail extends LeagueSummary {
   maintenanceMode: boolean;
   scoringPreset: string;
   rosterSlots: RosterSlotInput[];
+  rosterPositionLimits: RosterPositionLimitInput[];
   schedule: LeagueScheduleInput;
   members: LeagueMemberView[];
   recentActivity: Array<{ activityId: string; message: string; createdAtUtc: string }>;
@@ -229,6 +238,7 @@ export interface UpdateLeagueSettingsRequest {
   timeZone: string;
   teamCount: number;
   rosterSlots: RosterSlotInput[];
+  rosterPositionLimits: RosterPositionLimitInput[];
   schedule: LeagueScheduleInput;
 }
 
