@@ -60,7 +60,7 @@
                     <Button Style="{StaticResource NavButton}" Content="My Team"/>
                     <Button Style="{StaticResource NavButton}" Content="Players"/>
                     <Button Style="{StaticResource NavButton}" Content="Matchups"/>
-                    <Button Style="{StaticResource NavButton}" Content="Draft"/>
+                    <Button Style="{StaticResource NavButton}" Content="Draft" Click="OpenDraft_Click"/>
                 </StackPanel>
                 <Border DockPanel.Dock="Bottom" BorderBrush="#1D4ED8" BorderThickness="1" Padding="12" Background="#0B1220">
                     <StackPanel>
@@ -73,10 +73,10 @@
 
         <ScrollViewer Grid.Column="1" Padding="28">
             <StackPanel>
-                <TextBlock Text="PHASE 3 - CUSTOM SCORING" Foreground="#60A5FA" FontWeight="Bold" FontSize="14"/>
-                <TextBlock Text="Your scoring command center is online." Foreground="#FFFFFF"
+                <TextBlock Text="PHASE 6 - LIVE DRAFT" Foreground="#60A5FA" FontWeight="Bold" FontSize="14"/>
+                <TextBlock Text="Build the roster on draft night." Foreground="#FFFFFF"
                            FontSize="38" FontWeight="Bold" Margin="0,8,0,10"/>
-                <TextBlock Text="Create leagues, explain every scoring model, customize exact rule values, and preview versioned changes through the shared myFFL platform."
+                <TextBlock Text="Set the order, run the server-owned clock, queue players, draft safely, and recover from mistakes with commissioner controls."
                            Foreground="{StaticResource MutedTextBrush}" FontSize="16" Width="690" HorizontalAlignment="Left"
                            TextWrapping="Wrap" Margin="0,0,0,18"/>
 
@@ -102,8 +102,8 @@
                     </Border>
                     <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource PanelBorderBrush}" BorderThickness="1" Padding="18">
                         <StackPanel>
-                            <TextBlock Text="Custom Scoring" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
-                            <TextBlock Text="Rules, previews, and versions" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
+                            <TextBlock Text="Live Draft" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
+                            <TextBlock Text="Board, clock, queues, and autopick" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
                             <TextBlock Text="Available" Foreground="#22C55E" FontWeight="Bold" Margin="0,18,0,0"/>
                         </StackPanel>
                     </Border>
@@ -118,7 +118,8 @@
                             <TextBlock Text="- Authentication lifecycle: available" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
                             <TextBlock Text="- League management: available" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
                             <TextBlock Text="- Custom scoring editor: available" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
-                            <TextBlock Text="- ESPN synchronization: planned for Phase 4" Foreground="{StaticResource MutedTextBrush}"/>
+                            <TextBlock Text="- ESPN synchronization and scoring: available" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
+                            <TextBlock Text="- Live draft and roster acquisition: available" Foreground="{StaticResource MutedTextBrush}"/>
                         </StackPanel>
                     </StackPanel>
                 </Border>

@@ -4,6 +4,9 @@ import type {
   CreateLeagueRequest,
   CreateLeagueResponse,
   CursorPage,
+  DraftPlayerView,
+  DraftRoomResponse,
+  DraftSetupRequest,
   JoinLeagueResponse,
   LeagueDetail,
   LeagueFormat,
@@ -27,6 +30,8 @@ import {
   Activity,
   ArrowLeft,
   ArrowRight,
+  ArrowDown,
+  ArrowUp,
   CalendarDays,
   Calculator,
   Check,
@@ -38,19 +43,25 @@ import {
   Home,
   KeyRound,
   ListChecks,
+  ListPlus,
   LoaderCircle,
   Lock,
   LogOut,
   Menu,
   Plus,
+  Play,
+  Pause,
   RefreshCw,
   Radio,
   RotateCcw,
   Save,
+  Search,
   Settings,
   ShieldCheck,
   SlidersHorizontal,
+  SkipForward,
   Trophy,
+  Undo2,
   UserPlus,
   Users,
   X,
@@ -62,7 +73,7 @@ const apiBaseUrl =
   (isLocalHost ? "http://localhost:8787" : "https://api.myfflapp.com");
 
 type WorkspaceView = "home" | "create" | "join" | "league" | "game";
-type LeagueTab = "overview" | "members" | "scoring" | "settings";
+type LeagueTab = "overview" | "members" | "draft" | "scoring" | "settings";
 
 interface ApiEnvelope<T> {
   ok: boolean;
@@ -850,7 +861,7 @@ function LeagueDetailView({
         <span className={`league-state ${league.status}`}>{league.status}</span>
       </header>
       <div className="league-tabs" role="tablist">
-        {(["overview", "members", "scoring", "settings"] as LeagueTab[]).map((item) => (
+        {(["overview", "members", "draft", "scoring", "settings"] as LeagueTab[]).map((item) => (
           <button role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} type="button" key={item} onClick={() => setTab(item)}>{item}</button>
         ))}
       </div>
@@ -888,6 +899,7 @@ function LeagueDetailView({
         </div>
       )}
       {tab === "members" && <MembersView league={league} />}
+      {tab === "draft" && <DraftView league={league} accessToken={accessToken} />}
       {tab === "scoring" && <ScoringView league={league} accessToken={accessToken} canManage={canManage} />}
       {tab === "settings" && (
         <SettingsView
@@ -904,6 +916,167 @@ function LeagueDetailView({
     </div>
   );
 }
+
+function DraftView({ league, accessToken }: { league: LeagueDetail; accessToken: string }) {
+  const [room, setRoom] = useState<DraftRoomResponse | null>(null);
+  const [players, setPlayers] = useState<DraftPlayerView[]>([]);
+  const [query, setQuery] = useState("");
+  const [position, setPosition] = useState("");
+  const [busy, setBusy] = useState(true);
+  const [error, setError] = useState("");
+  const [clockNow, setClockNow] = useState(Date.now());
+  const [setup, setSetup] = useState<Omit<DraftSetupRequest, "revisionNumber"> | null>(null);
+
+  async function loadRoom(silent = false) {
+    if (!silent) setBusy(true);
+    try {
+      const next = await leagueRequest<DraftRoomResponse>(`/api/leagues/${league.leagueId}/draft`, accessToken);
+      setRoom(next);
+      setSetup((current) => current ?? {
+        draftType: next.draftType,
+        scheduledAtUtc: next.scheduledAtUtc,
+        rounds: next.rounds,
+        pickSeconds: next.pickSeconds,
+        autopickEnabled: next.autopickEnabled,
+        teamOrder: next.teams.map((team) => team.fantasyTeamId),
+      });
+      setError("");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Unable to load the draft room.");
+    } finally {
+      if (!silent) setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadRoom();
+    const refresh = window.setInterval(() => void loadRoom(true), 1500);
+    const timer = window.setInterval(() => setClockNow(Date.now()), 250);
+    return () => { window.clearInterval(refresh); window.clearInterval(timer); };
+  }, [accessToken, league.leagueId]);
+
+  useEffect(() => {
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({ limit: "120" });
+        if (query.trim()) params.set("query", query.trim());
+        if (position) params.set("position", position);
+        const next = await leagueRequest<DraftPlayerView[]>(`/api/leagues/${league.leagueId}/draft/players?${params}`, accessToken);
+        if (active) setPlayers(next);
+      } catch (requestError) {
+        if (active) setError(requestError instanceof Error ? requestError.message : "Unable to load players.");
+      }
+    }, 180);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [accessToken, league.leagueId, query, position, room?.revisionNumber]);
+
+  async function command(action: string, body: Record<string, unknown> = {}) {
+    if (!room) return;
+    setBusy(true);
+    try {
+      setRoom(await leagueRequest<DraftRoomResponse>(`/api/leagues/${league.leagueId}/draft/${action}`, accessToken, {
+        method: "POST", body: { revisionNumber: room.revisionNumber, ...body },
+      }));
+      setError("");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Draft command failed.");
+      await loadRoom(true);
+    } finally { setBusy(false); }
+  }
+
+  async function makePick(playerId: string) {
+    if (!room || (!room.canPick && !room.canManage)) return;
+    setBusy(true);
+    try {
+      setRoom(await leagueRequest<DraftRoomResponse>(`/api/leagues/${league.leagueId}/draft/pick`, accessToken, {
+        method: "POST",
+        body: { playerId, expectedOverallPick: room.currentOverallPick, revisionNumber: room.revisionNumber },
+      }));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Unable to make that pick.");
+      await loadRoom(true);
+    } finally { setBusy(false); }
+  }
+
+  async function saveQueue(playerIds: string[]) {
+    if (!room) return;
+    try {
+      setRoom(await leagueRequest<DraftRoomResponse>(`/api/leagues/${league.leagueId}/draft/queue`, accessToken, {
+        method: "PUT", body: { playerIds, autopickEnabled: room.autopickEnabled },
+      }));
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to update your queue."); }
+  }
+
+  async function saveSetup() {
+    if (!room || !setup) return;
+    setBusy(true);
+    try {
+      const next = await leagueRequest<DraftRoomResponse>(`/api/leagues/${league.leagueId}/draft/setup`, accessToken, {
+        method: "PUT", body: { ...setup, revisionNumber: room.revisionNumber },
+      });
+      setRoom(next);
+      setSetup({ ...setup, teamOrder: next.teams.map((team) => team.fantasyTeamId) });
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to save draft setup."); }
+    finally { setBusy(false); }
+  }
+
+  function moveTeam(index: number, direction: -1 | 1) {
+    if (!setup) return;
+    const target = index + direction;
+    if (target < 0 || target >= setup.teamOrder.length) return;
+    const order = [...setup.teamOrder];
+    [order[index], order[target]] = [order[target], order[index]];
+    setSetup({ ...setup, teamOrder: order });
+  }
+
+  if (busy && !room) return <div className="workspace-loading"><LoaderCircle className="spin" size={28}/><span>Loading draft room</span></div>;
+  if (!room) return <section className="draft-empty">{error || "Draft room unavailable."}</section>;
+  const seconds = room.pickDeadlineUtc ? Math.max(0, Math.ceil((Date.parse(room.pickDeadlineUtc) - clockNow) / 1000)) : room.pickSeconds;
+  const queueIds = room.queue.map((player) => player.playerId);
+  const editableSetup = room.canManage && ["setup", "scheduled"].includes(room.status);
+  const orderedTeams = setup ? setup.teamOrder.map((id) => room.teams.find((team) => team.fantasyTeamId === id)).filter(Boolean) as DraftRoomResponse["teams"] : room.teams;
+
+  return (
+    <div className="draft-room">
+      {error && <InlineAlert message={error} onClose={() => setError("")}/>}
+      <header className="draft-command-bar">
+        <div><p className="eyebrow">Live draft</p><h2>{room.status === "active" ? `${room.currentTeamName} is on the clock` : `Draft ${room.status}`}</h2><span>Round {room.currentRound} - Pick {room.currentOverallPick} of {room.totalPicks}</span></div>
+        <div className={`draft-clock ${seconds <= 10 && room.status === "active" ? "urgent" : ""}`}><small>Pick clock</small><strong>{formatDraftClock(seconds)}</strong></div>
+        {room.canManage && <div className="draft-controls">
+          {room.status === "active" ? <button className="icon-button" title="Pause draft" aria-label="Pause draft" onClick={() => void command("pause")}><Pause size={18}/></button> : <button className="icon-button" title={room.status === "paused" ? "Resume draft" : "Start draft"} aria-label={room.status === "paused" ? "Resume draft" : "Start draft"} disabled={room.status === "completed"} onClick={() => void command(room.status === "paused" ? "resume" : "start")}><Play size={18}/></button>}
+          <button className="icon-button" title="Undo last pick" aria-label="Undo last pick" onClick={() => void command("undo")}><Undo2 size={18}/></button>
+          <button className="icon-button" title="Skip current pick" aria-label="Skip current pick" disabled={room.status !== "active"} onClick={() => void command("skip")}><SkipForward size={18}/></button>
+          <button className="draft-time-button" disabled={room.status !== "active"} onClick={() => void command("time", { seconds: 30 })}>+30s</button>
+        </div>}
+      </header>
+
+      {editableSetup && setup && <section className="draft-setup-band">
+        <div><label>Format<select value={setup.draftType} onChange={(event) => setSetup({ ...setup, draftType: event.target.value as DraftSetupRequest["draftType"] })}><option value="snake">Snake</option><option value="linear">Linear</option><option value="third-round-reversal">Third-round reversal</option><option value="offline">Offline entry</option></select></label><label>Rounds<input type="number" min="1" max="60" value={setup.rounds} onChange={(event) => setSetup({ ...setup, rounds: Number(event.target.value) })}/></label><label>Pick timer<input type="number" min="15" max="600" step="15" value={setup.pickSeconds} onChange={(event) => setSetup({ ...setup, pickSeconds: Number(event.target.value) })}/></label><label>Draft time<input type="datetime-local" value={setup.scheduledAtUtc ? localDateTime(setup.scheduledAtUtc) : ""} onChange={(event) => setSetup({ ...setup, scheduledAtUtc: event.target.value ? new Date(event.target.value).toISOString() : undefined })}/></label></div>
+        <div className="draft-order"><span>Draft order</span>{orderedTeams.map((team, index) => <p key={team.fantasyTeamId}><b>{index + 1}</b><span>{team.teamName}</span><button className="icon-button" aria-label={`Move ${team.teamName} up`} disabled={index === 0} onClick={() => moveTeam(index, -1)}><ArrowUp size={15}/></button><button className="icon-button" aria-label={`Move ${team.teamName} down`} disabled={index === orderedTeams.length - 1} onClick={() => moveTeam(index, 1)}><ArrowDown size={15}/></button></p>)}</div>
+        <button className="primary-button compact" disabled={busy} onClick={() => void saveSetup()}><Save size={16}/> Save setup</button>
+      </section>}
+
+      <section className="draft-board-wrap"><div className="draft-board" style={{ "--draft-teams": Math.max(1, room.teams.length) } as React.CSSProperties}>
+        {room.teams.map((team) => <div className="draft-team-heading" key={team.fantasyTeamId}><b>{team.slotNumber}</b><span>{team.teamName}</span></div>)}
+        {Array.from({ length: room.rounds }, (_, roundIndex) => room.teams.map((team) => {
+          const overall = overallPickForSlot(room.draftType, roundIndex + 1, team.slotNumber, room.teams.length);
+          const pick = room.picks.find((item) => item.overallPick === overall);
+          return <div className={`draft-board-cell ${overall === room.currentOverallPick && room.status === "active" ? "on-clock" : ""}`} key={`${roundIndex}-${team.fantasyTeamId}`}><small>{overall}</small>{pick?.playerName ? <><strong>{pick.playerName}</strong><span>{pick.position} {pick.nflTeam}</span></> : pick?.status === "skipped" ? <em>Skipped</em> : <span>Round {roundIndex + 1}</span>}</div>;
+        }))}
+      </div></section>
+
+      <div className="draft-workspace-grid">
+        <section className="draft-player-pool"><div className="section-heading"><div><p className="eyebrow">Available players</p><h2>Player board</h2></div><span>{players.filter((player) => !player.drafted).length} shown</span></div><div className="draft-filters"><label><Search size={16}/><input placeholder="Search players" value={query} onChange={(event) => setQuery(event.target.value)}/></label><select aria-label="Filter position" value={position} onChange={(event) => setPosition(event.target.value)}><option value="">All positions</option>{["QB","RB","WR","TE","K","DST","DL","LB","DB"].map((item) => <option key={item}>{item}</option>)}</select></div><div className="draft-player-list">{players.map((player) => <div className={player.drafted ? "drafted" : ""} key={player.playerId}><b>{player.rank}</b><span><strong>{player.displayName}</strong><small>{player.position} - {player.nflTeam ?? "FA"}</small></span><button className="icon-button" title={player.queued ? "Remove from queue" : "Add to queue"} aria-label={player.queued ? `Remove ${player.displayName} from queue` : `Add ${player.displayName} to queue`} disabled={player.drafted} onClick={() => void saveQueue(player.queued ? queueIds.filter((id) => id !== player.playerId) : [...queueIds, player.playerId])}>{player.queued ? <X size={16}/> : <ListPlus size={16}/>}</button><button className="draft-player-button" disabled={player.drafted || (!room.canPick && !room.canManage) || room.status !== "active"} onClick={() => void makePick(player.playerId)}>Draft</button></div>)}</div></section>
+        <aside className="draft-side-panel"><div className="section-heading"><div><p className="eyebrow">Autopick priority</p><h2>My queue</h2></div><ListChecks size={18}/></div>{room.queue.length ? <div className="draft-queue-list">{room.queue.map((player, index) => <div key={player.playerId}><b>{index + 1}</b><span>{player.displayName}<small>{player.position} {player.nflTeam}</small></span><button className="icon-button" aria-label={`Remove ${player.displayName}`} onClick={() => void saveQueue(queueIds.filter((id) => id !== player.playerId))}><X size={15}/></button></div>)}</div> : <p className="muted-empty">Add players from the board. The first legal, available player is selected on autopick.</p>}<div className="draft-roster-summary"><p className="eyebrow">Current rosters</p>{room.teams.map((team) => <div key={team.fantasyTeamId}><span>{team.teamName}</span><b>{room.picks.filter((pick) => pick.fantasyTeamId === team.fantasyTeamId && pick.status === "active").length}/{room.rounds}</b></div>)}</div></aside>
+      </div>
+    </div>
+  );
+}
+
+function formatDraftClock(seconds: number): string { return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`; }
+function localDateTime(value: string): string { const date = new Date(value); const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000); return local.toISOString().slice(0, 16); }
+function overallPickForSlot(type: DraftSetupRequest["draftType"], round: number, slot: number, teams: number): number { const reversed = type === "snake" ? round % 2 === 0 : type === "third-round-reversal" ? round === 2 || (round >= 3 && round % 2 === 1) : false; const index = reversed ? teams - slot : slot - 1; return (round - 1) * teams + index + 1; }
 
 function MembersView({ league }: { league: LeagueDetail }) {
   return (

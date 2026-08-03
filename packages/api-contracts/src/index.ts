@@ -35,7 +35,7 @@ export interface PhaseStatusItem {
 }
 
 export interface PhaseStatusResponse {
-  phase: "phase-1" | "phase-2" | "phase-3" | "phase-4" | "phase-5";
+  phase: "phase-1" | "phase-2" | "phase-3" | "phase-4" | "phase-5" | "phase-6";
   title: string;
   items: PhaseStatusItem[];
 }
@@ -246,6 +246,89 @@ export interface LeagueInvitationResponse {
   invitationCode: string;
   invitationLink: string;
   expiresAtUtc?: string;
+}
+
+export type DraftType = "snake" | "linear" | "third-round-reversal" | "offline";
+export type DraftStatus = "setup" | "scheduled" | "active" | "paused" | "completed";
+
+export interface DraftSetupRequest {
+  revisionNumber: number;
+  draftType: DraftType;
+  scheduledAtUtc?: string;
+  rounds: number;
+  pickSeconds: number;
+  autopickEnabled: boolean;
+  teamOrder: string[];
+}
+
+export interface DraftTeamView {
+  fantasyTeamId: string;
+  teamName: string;
+  managerUserId: string;
+  slotNumber: number;
+}
+
+export interface DraftPickView {
+  draftPickId: string;
+  overallPick: number;
+  roundNumber: number;
+  slotNumber: number;
+  fantasyTeamId: string;
+  teamName: string;
+  playerId?: string;
+  playerName?: string;
+  position?: string;
+  nflTeam?: string;
+  selectionSource: "manager" | "autopick" | "commissioner" | "offline" | "skip";
+  status: "active" | "skipped";
+  madeAtUtc: string;
+}
+
+export interface DraftPlayerView {
+  playerId: string;
+  displayName: string;
+  position: string;
+  nflTeam?: string;
+  rank: number;
+  queued: boolean;
+  drafted: boolean;
+}
+
+export interface DraftRoomResponse {
+  draftId: string;
+  leagueId: string;
+  seasonId: string;
+  draftType: DraftType;
+  status: DraftStatus;
+  scheduledAtUtc?: string;
+  rounds: number;
+  pickSeconds: number;
+  autopickEnabled: boolean;
+  currentOverallPick: number;
+  totalPicks: number;
+  currentRound: number;
+  currentSlotNumber: number;
+  currentTeamId?: string;
+  currentTeamName?: string;
+  pickDeadlineUtc?: string;
+  revisionNumber: number;
+  canManage: boolean;
+  canPick: boolean;
+  teams: DraftTeamView[];
+  picks: DraftPickView[];
+  queue: DraftPlayerView[];
+}
+
+export interface MakeDraftPickRequest {
+  playerId: string;
+  expectedOverallPick: number;
+  revisionNumber: number;
+}
+
+export interface DraftQueueUpdateRequest {
+  playerIds: string[];
+  autopickEnabled: boolean;
+  revisionNumber?: number;
 }
 
 export interface ScoringPresetSummary {

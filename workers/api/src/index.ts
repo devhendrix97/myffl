@@ -28,6 +28,7 @@ import { handleAdminRequest } from "./admin";
 import { enqueueScheduledProviderWork, processProviderQueue, type ProviderJob } from "./provider";
 import { handleGameFeedRequest } from "./game-feed";
 import { processScoringQueue, type ScoringJob } from "./score-processing";
+import { handleDraftRequest, processExpiredDrafts } from "./draft";
 
 export default {
   async fetch(request, env, ctx): Promise<Response> {
@@ -92,7 +93,7 @@ export default {
     }
   },
   async scheduled(_controller, env, ctx): Promise<void> {
-    ctx.waitUntil(enqueueScheduledProviderWork(env));
+    ctx.waitUntil(Promise.all([enqueueScheduledProviderWork(env), processExpiredDrafts(env)]).then(() => undefined));
   },
   async queue(batch, env): Promise<void> {
     if (batch.queue === "myffl-espn-updates") {
@@ -118,7 +119,7 @@ async function routeRequest(
         service: "myffl-api",
         environment: env.ENVIRONMENT,
         status: "healthy",
-        version: "0.6.0",
+        version: "0.7.0",
         utc: new Date().toISOString(),
       } satisfies HealthResponse,
     };
@@ -170,6 +171,8 @@ async function routeRequest(
   if (gameFeedResult) return gameFeedResult;
   const scoringResult = await handleScoringRequest(request, url, env, ctx, correlationId);
   if (scoringResult) return scoringResult;
+  const draftResult = await handleDraftRequest(request, url, env, ctx, correlationId);
+  if (draftResult) return draftResult;
   const leagueResult = await handleLeagueRequest(request, url, env, ctx, correlationId);
   if (leagueResult) return leagueResult;
   return undefined;
@@ -177,8 +180,8 @@ async function routeRequest(
 
 function phaseStatus(): PhaseStatusResponse {
   return {
-    phase: "phase-5",
-    title: "Live Scoring Engine",
+    phase: "phase-6",
+    title: "Draft System",
     items: [
       {
         key: "cloudflare-resources",
@@ -233,6 +236,12 @@ function phaseStatus(): PhaseStatusResponse {
         label: "League-specific live scoring",
         status: "available",
         summary: "Provider statistics are scored independently for each league with component breakdowns and preserved revisions.",
+      },
+      {
+        key: "draft-system",
+        label: "Live draft system",
+        status: "available",
+        summary: "Draft setup, board, server clock, queues, autopick, roster acquisition, and commissioner recovery controls are available.",
       },
     ],
   };

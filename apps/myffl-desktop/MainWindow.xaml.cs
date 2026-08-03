@@ -47,6 +47,9 @@ public partial class MainWindow : Window
     private void OpenLeagues_Click(object sender, RoutedEventArgs e) =>
         OpenUrl("https://app.myfflapp.com");
 
+    private void OpenDraft_Click(object sender, RoutedEventArgs e) =>
+        OpenUrl("https://app.myfflapp.com");
+
     private static void OpenUrl(string url)
     {
         Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
