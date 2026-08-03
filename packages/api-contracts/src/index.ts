@@ -35,7 +35,7 @@ export interface PhaseStatusItem {
 }
 
 export interface PhaseStatusResponse {
-  phase: "phase-1" | "phase-2";
+  phase: "phase-1" | "phase-2" | "phase-3";
   title: string;
   items: PhaseStatusItem[];
 }
@@ -107,7 +107,25 @@ export interface VerifyEmailResponse extends AuthUser {
 }
 
 export type LeaguePrivacy = "private" | "public";
-export type LeagueFormat = "redraft" | "keeper" | "dynasty" | "best-ball";
+export type LeagueFormat = "single-season" | "redraft" | "keeper" | "dynasty" | "best-ball";
+export type ScoringPresetKey = "standard" | "half-ppr" | "full-ppr" | "superflex" | "te-premium" | "idp";
+export type ScoringCalculationType =
+  | "points-per-unit"
+  | "flat-per-event"
+  | "one-time-threshold"
+  | "repeating-threshold"
+  | "range-based"
+  | "tiered"
+  | "position-specific"
+  | "minimum-requirement"
+  | "maximum-award";
+export type ScoringEffectiveScope =
+  | "next-week"
+  | "unstarted-weeks"
+  | "selected-future-weeks"
+  | "retroactive-current-season"
+  | "entire-season"
+  | "next-season";
 export type LeagueRole = "commissioner" | "co-commissioner" | "manager";
 export type LeagueStatus = "active" | "archived" | "maintenance";
 
@@ -140,7 +158,7 @@ export interface CreateLeagueRequest {
   seasonYear: number;
   timeZone: string;
   format: LeagueFormat;
-  scoringPreset: "standard" | "half-ppr" | "full-ppr" | "superflex" | "te-premium" | "idp";
+  scoringPreset: ScoringPresetKey;
   commissionerTeamName: string;
   rosterSlots: RosterSlotInput[];
   schedule: LeagueScheduleInput;
@@ -218,4 +236,106 @@ export interface LeagueInvitationResponse {
   invitationCode: string;
   invitationLink: string;
   expiresAtUtc?: string;
+}
+
+export interface ScoringPresetSummary {
+  presetKey: ScoringPresetKey;
+  displayName: string;
+  description: string;
+}
+
+export interface ScoringStatisticDefinition {
+  statisticKey: string;
+  displayName: string;
+  description: string;
+  category: string;
+  unitLabel: string;
+  defaultCalculationType: ScoringCalculationType;
+  allowedCalculationTypes: ScoringCalculationType[];
+  allowedPositions: string[];
+  displayOrder: number;
+}
+
+export interface ScoringRule {
+  scoringRuleId: string;
+  statisticKey: string;
+  displayName: string;
+  description: string;
+  category: string;
+  enabled: boolean;
+  calculationType: ScoringCalculationType;
+  pointValue: string;
+  incrementValue?: string;
+  thresholdValue?: string;
+  positions: string[];
+  maxAwards?: number;
+  tiers: Array<{ minimum: string; maximum?: string; points: string }>;
+  displayOrder: number;
+}
+
+export interface ScoringVersionSummary {
+  scoringVersionId: string;
+  versionNumber: number;
+  status: "draft" | "active" | "superseded" | "abandoned";
+  sourcePresetKey?: ScoringPresetKey;
+  revisionNumber: number;
+  effectiveScope?: ScoringEffectiveScope;
+  effectiveFromWeek?: number;
+  effectiveToWeek?: number;
+  changeReason?: string;
+  createdByUserId: string;
+  createdAtUtc: string;
+  appliedAtUtc?: string;
+}
+
+export interface ScoringConfiguration extends ScoringVersionSummary {
+  leagueId: string;
+  seasonId: string;
+  seasonYear: number;
+  rules: ScoringRule[];
+}
+
+export interface ScoringCatalogResponse {
+  presets: ScoringPresetSummary[];
+  statistics: ScoringStatisticDefinition[];
+}
+
+export interface StartScoringDraftRequest {
+  source: "current" | "preset";
+  presetKey?: ScoringPresetKey;
+}
+
+export interface SaveScoringRulesRequest {
+  revisionNumber: number;
+  rules: ScoringRule[];
+}
+
+export interface ScoringPreviewRequest {
+  revisionNumber: number;
+  effectiveScope: ScoringEffectiveScope;
+  effectiveFromWeek?: number;
+  effectiveToWeek?: number;
+}
+
+export interface ScoringRuleDifference {
+  statisticKey: string;
+  displayName: string;
+  change: "added" | "removed" | "changed";
+  currentValue?: string;
+  proposedValue?: string;
+}
+
+export interface ScoringPreviewResponse {
+  currentVersionNumber?: number;
+  proposedVersionNumber: number;
+  effectiveScope: ScoringEffectiveScope;
+  affectedWeeks: number[];
+  changedRuleCount: number;
+  differences: ScoringRuleDifference[];
+  recalculationRequired: boolean;
+  sampleStatus: string;
+}
+
+export interface ApplyScoringDraftRequest extends ScoringPreviewRequest {
+  changeReason: string;
 }

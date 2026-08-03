@@ -40,7 +40,7 @@ interface DirectoryRow {
   joined_at_utc: string;
 }
 
-interface LeagueRow {
+export interface LeagueRow {
   league_id: string;
   league_name: string;
   description: string | null;
@@ -321,7 +321,7 @@ async function createLeague(
       ).bind(body.requestId, principal.userId, leagueId, JSON.stringify(response), nowIso),
       env.CORE_DB.prepare(
         `update database_shards
-         set league_count = league_count + 1, schema_version = max(schema_version, 2), updated_at_utc = ?1
+         set league_count = league_count + 1, schema_version = max(schema_version, 3), updated_at_utc = ?1
          where binding_name = ?2`,
       ).bind(nowIso, shard.binding_name),
       coreAuditStatement(env.CORE_DB, principal.userId, "league.created", leagueId, correlationId, nowIso),
@@ -757,7 +757,7 @@ async function getLeagueDetail(
   };
 }
 
-async function requireLeagueRole(
+export async function requireLeagueRole(
   principal: AccessTokenPrincipal,
   leagueId: string,
   env: Env,
@@ -785,7 +785,7 @@ async function requireLeagueRole(
   return { db, route, role: membership.role };
 }
 
-async function getLeagueRow(db: D1Database, leagueId: string): Promise<LeagueRow> {
+export async function getLeagueRow(db: D1Database, leagueId: string): Promise<LeagueRow> {
   const row = await db.prepare(
     `select leagues.league_id, leagues.league_name, leagues.description, leagues.privacy,
             leagues.league_format, leagues.time_zone, leagues.max_teams,
@@ -903,7 +903,7 @@ function requirePrivacy(value: unknown): LeaguePrivacy {
 }
 
 function requireFormat(value: unknown): LeagueFormat {
-  if (value !== "redraft" && value !== "keeper" && value !== "dynasty" && value !== "best-ball") {
+  if (value !== "single-season" && value !== "redraft" && value !== "keeper" && value !== "dynasty" && value !== "best-ball") {
     throw new ApiException(400, "invalid_league_format", "Choose a supported league format.");
   }
   return value;

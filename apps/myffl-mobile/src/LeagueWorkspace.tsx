@@ -12,6 +12,13 @@ import type {
   LeagueScheduleInput,
   LeagueSummary,
   RosterSlotInput,
+  ScoringCalculationType,
+  ScoringCatalogResponse,
+  ScoringConfiguration,
+  ScoringEffectiveScope,
+  ScoringPreviewResponse,
+  ScoringRule,
+  ScoringVersionSummary,
   UpdateLeagueSettingsRequest,
 } from "@myffl/api-contracts";
 import {
@@ -19,11 +26,13 @@ import {
   ArrowLeft,
   ArrowRight,
   CalendarDays,
+  Calculator,
   Check,
   ChevronRight,
   Clipboard,
   Copy,
   Gauge,
+  History,
   Home,
   KeyRound,
   ListChecks,
@@ -37,6 +46,7 @@ import {
   Save,
   Settings,
   ShieldCheck,
+  SlidersHorizontal,
   Trophy,
   UserPlus,
   Users,
@@ -49,7 +59,7 @@ const apiBaseUrl =
   (isLocalHost ? "http://localhost:8787" : "https://api.myfflapp.com");
 
 type WorkspaceView = "home" | "create" | "join" | "league";
-type LeagueTab = "overview" | "members" | "settings";
+type LeagueTab = "overview" | "members" | "scoring" | "settings";
 
 interface ApiEnvelope<T> {
   ok: boolean;
@@ -66,7 +76,7 @@ class LeagueApiError extends Error {
 async function leagueRequest<T>(
   path: string,
   accessToken: string,
-  options: { method?: "GET" | "POST" | "PATCH"; body?: unknown } = {},
+  options: { method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; body?: unknown } = {},
 ): Promise<T> {
   const response = await fetch(`${apiBaseUrl}${path}`, {
     method: options.method ?? "GET",
@@ -474,18 +484,23 @@ function FormatStep({
   update: <K extends keyof CreateLeagueRequest>(key: K, value: CreateLeagueRequest[K]) => void;
 }) {
   const formats: Array<{ value: LeagueFormat; label: string; description: string }> = [
-    { value: "redraft", label: "Redraft", description: "Fresh player draft every season." },
+    { value: "single-season", label: "Single Season", description: "A one-year league for an office pool, event, or group that does not need to renew." },
+    { value: "redraft", label: "Redraft", description: "A continuing league with a fresh player draft every season." },
     { value: "keeper", label: "Keeper", description: "Carry selected players into next year." },
     { value: "dynasty", label: "Dynasty", description: "Retain full rosters across seasons." },
     { value: "best-ball", label: "Best Ball", description: "Optimal lineups are selected automatically." },
   ];
   const scoring = [
-    ["standard", "Standard"], ["half-ppr", "Half PPR"], ["full-ppr", "Full PPR"],
-    ["superflex", "Superflex"], ["te-premium", "TE Premium"], ["idp", "IDP"],
+    { value: "standard", label: "Standard", description: "Receptions earn no points. Scoring comes from yards, touchdowns, kicking, and defense." },
+    { value: "half-ppr", label: "Half PPR", description: "Each catch earns 0.5 points, balancing receivers with runners and touchdown scorers." },
+    { value: "full-ppr", label: "Full PPR", description: "Each catch earns 1 point, rewarding high-volume receivers and pass-catching backs." },
+    { value: "superflex", label: "Superflex", description: "Full PPR with a flex spot that can start a quarterback, making quarterbacks more valuable." },
+    { value: "te-premium", label: "TE Premium", description: "Full PPR plus an extra 0.5 points for every reception made by a tight end." },
+    { value: "idp", label: "IDP", description: "Full PPR offense plus individual defenders scoring tackles, sacks, and interceptions." },
   ] as const;
   return (
     <div className="wizard-step">
-      <StepHeading icon={<Gauge size={22} />} title="Format and scoring" subtitle="Choose a starting structure. Scoring becomes fully editable in Phase 3." />
+      <StepHeading icon={<Gauge size={22} />} title="Format and scoring" subtitle="Choose a starting structure. Commissioners can customize every scoring rule after setup." />
       <h3 className="control-heading">League format</h3>
       <div className="choice-grid">
         {formats.map((format) => (
@@ -495,9 +510,11 @@ function FormatStep({
         ))}
       </div>
       <h3 className="control-heading">Scoring starting point</h3>
-      <div className="scoring-options">
-        {scoring.map(([value, label]) => (
-          <button className={draft.scoringPreset === value ? "selected" : ""} type="button" key={value} onClick={() => update("scoringPreset", value)}>{label}</button>
+      <div className="choice-grid scoring-options">
+        {scoring.map(({ value, label, description }) => (
+          <button className={draft.scoringPreset === value ? "selected" : ""} type="button" key={value} onClick={() => update("scoringPreset", value)}>
+            <strong>{label}</strong><span>{description}</span>{draft.scoringPreset === value && <Check size={18} />}
+          </button>
         ))}
       </div>
     </div>
@@ -673,7 +690,7 @@ function LeagueDetailView({
         <span className={`league-state ${league.status}`}>{league.status}</span>
       </header>
       <div className="league-tabs" role="tablist">
-        {(["overview", "members", "settings"] as LeagueTab[]).map((item) => (
+        {(["overview", "members", "scoring", "settings"] as LeagueTab[]).map((item) => (
           <button role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} type="button" key={item} onClick={() => setTab(item)}>{item}</button>
         ))}
       </div>
@@ -711,6 +728,7 @@ function LeagueDetailView({
         </div>
       )}
       {tab === "members" && <MembersView league={league} />}
+      {tab === "scoring" && <ScoringView league={league} accessToken={accessToken} canManage={canManage} />}
       {tab === "settings" && (
         <SettingsView
           league={league}
@@ -745,6 +763,299 @@ function MembersView({ league }: { league: LeagueDetail }) {
     </section>
   );
 }
+
+function ScoringView({
+  league,
+  accessToken,
+  canManage,
+}: {
+  league: LeagueDetail;
+  accessToken: string;
+  canManage: boolean;
+}) {
+  const [configuration, setConfiguration] = useState<ScoringConfiguration | null>(null);
+  const [catalog, setCatalog] = useState<ScoringCatalogResponse | null>(null);
+  const [versions, setVersions] = useState<ScoringVersionSummary[]>([]);
+  const [rules, setRules] = useState<ScoringRule[]>([]);
+  const [preview, setPreview] = useState<ScoringPreviewResponse | null>(null);
+  const [effectiveScope, setEffectiveScope] = useState<ScoringEffectiveScope>("next-week");
+  const [fromWeek, setFromWeek] = useState(1);
+  const [toWeek, setToWeek] = useState(18);
+  const [changeReason, setChangeReason] = useState("");
+  const [busy, setBusy] = useState(true);
+  const [error, setError] = useState("");
+  const isDraft = configuration?.status === "draft";
+
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      setBusy(true);
+      setError("");
+      try {
+        const [nextConfiguration, nextCatalog, nextVersions] = await Promise.all([
+          leagueRequest<ScoringConfiguration>(`/api/leagues/${league.leagueId}/scoring`, accessToken),
+          leagueRequest<ScoringCatalogResponse>(`/api/leagues/${league.leagueId}/scoring/catalog`, accessToken),
+          leagueRequest<ScoringVersionSummary[]>(`/api/leagues/${league.leagueId}/scoring/versions`, accessToken),
+        ]);
+        if (!active) return;
+        setConfiguration(nextConfiguration);
+        setRules(nextConfiguration.rules);
+        setCatalog(nextCatalog);
+        setVersions(nextVersions);
+      } catch (requestError) {
+        if (active) setError(requestError instanceof Error ? requestError.message : "Unable to load scoring.");
+      } finally {
+        if (active) setBusy(false);
+      }
+    }
+    void load();
+    return () => { active = false; };
+  }, [accessToken, league.leagueId]);
+
+  function acceptConfiguration(next: ScoringConfiguration) {
+    setConfiguration(next);
+    setRules(next.rules);
+    setPreview(null);
+  }
+
+  async function startDraft(source: "current" | "preset", presetKey?: string) {
+    setBusy(true);
+    setError("");
+    try {
+      acceptConfiguration(await leagueRequest<ScoringConfiguration>(
+        `/api/leagues/${league.leagueId}/scoring/draft`,
+        accessToken,
+        { method: "POST", body: { source, presetKey } },
+      ));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Unable to create a scoring draft.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function updateRule(index: number, update: Partial<ScoringRule>) {
+    setRules((current) => current.map((rule, ruleIndex) => ruleIndex === index ? { ...rule, ...update } : rule));
+    setPreview(null);
+  }
+
+  async function saveDraft(): Promise<ScoringConfiguration> {
+    if (!configuration || configuration.status !== "draft") throw new Error("Create a draft before saving changes.");
+    const saved = await leagueRequest<ScoringConfiguration>(
+      `/api/leagues/${league.leagueId}/scoring/rules`,
+      accessToken,
+      { method: "POST", body: { revisionNumber: configuration.revisionNumber, rules } },
+    );
+    acceptConfiguration(saved);
+    return saved;
+  }
+
+  async function save() {
+    setBusy(true);
+    setError("");
+    try {
+      await saveDraft();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Unable to save scoring rules.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function scopeBody(revisionNumber: number) {
+    const includeFrom = effectiveScope === "next-week" || effectiveScope === "unstarted-weeks" || effectiveScope === "selected-future-weeks";
+    return {
+      revisionNumber,
+      effectiveScope,
+      ...(includeFrom ? { effectiveFromWeek: fromWeek } : {}),
+      ...(effectiveScope === "selected-future-weeks" ? { effectiveToWeek: toWeek } : {}),
+    };
+  }
+
+  async function saveAndPreview() {
+    setBusy(true);
+    setError("");
+    try {
+      const saved = await saveDraft();
+      setPreview(await leagueRequest<ScoringPreviewResponse>(
+        `/api/leagues/${league.leagueId}/scoring/preview`,
+        accessToken,
+        { method: "POST", body: scopeBody(saved.revisionNumber) },
+      ));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Unable to preview scoring changes.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function apply() {
+    if (!configuration || !preview) return;
+    setBusy(true);
+    setError("");
+    try {
+      const applied = await leagueRequest<ScoringConfiguration>(
+        `/api/leagues/${league.leagueId}/scoring/apply`,
+        accessToken,
+        { method: "POST", body: { ...scopeBody(configuration.revisionNumber), changeReason } },
+      );
+      acceptConfiguration(applied);
+      setChangeReason("");
+      setVersions(await leagueRequest<ScoringVersionSummary[]>(`/api/leagues/${league.leagueId}/scoring/versions`, accessToken));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Unable to apply scoring changes.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (busy && !configuration) {
+    return <div className="workspace-loading scoring-loading"><LoaderCircle className="spin" size={26} /><span>Loading scoring rules</span></div>;
+  }
+
+  return (
+    <section className="scoring-view">
+      <div className="section-heading scoring-heading">
+        <div><p className="eyebrow">Commissioner scoring</p><h2>Scoring rules</h2><p>Every value is stored as an exact decimal and versioned for this league season.</p></div>
+        <span className={`scoring-status ${configuration?.status ?? "active"}`}>{configuration?.status ?? "active"} v{configuration?.versionNumber ?? 1}</span>
+      </div>
+      {error && <InlineAlert message={error} onClose={() => setError("")} />}
+
+      {canManage && catalog && (
+        <section className="scoring-presets">
+          <div className="scoring-subheading"><div><h3>Starting presets</h3><p>Selecting a preset creates a new draft. Nothing changes for the league until you review and apply it.</p></div></div>
+          <div className="preset-list">
+            {catalog.presets.map((preset) => (
+              <button type="button" key={preset.presetKey} disabled={busy} onClick={() => void startDraft("preset", preset.presetKey)}>
+                <strong>{preset.displayName}</strong><span>{preset.description}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <div className="scoring-toolbar">
+        <div>
+          <strong>{isDraft ? "Draft rules" : "Official rules"}</strong>
+          <span>{rules.filter((rule) => rule.enabled).length} of {rules.length} statistics enabled</span>
+        </div>
+        {canManage && !isDraft && (
+          <button className="primary-button compact" type="button" disabled={busy} onClick={() => void startDraft("current")}>
+            <SlidersHorizontal size={17} /> Customize scoring
+          </button>
+        )}
+        {canManage && isDraft && (
+          <button className="outline-button compact" type="button" disabled={busy} onClick={() => void save()}>
+            {busy ? <LoaderCircle className="spin" size={17} /> : <Save size={17} />} Save draft
+          </button>
+        )}
+      </div>
+
+      <div className="scoring-rule-list">
+        {groupRules(rules).map(([category, categoryRules]) => (
+          <section className="scoring-category" key={category}>
+            <h3>{category}</h3>
+            <div className="scoring-rule-header" aria-hidden="true"><span>On</span><span>Statistic</span><span>Calculation</span><span>Points</span></div>
+            {categoryRules.map(({ rule, index }) => {
+              const definition = catalog?.statistics.find((item) => item.statisticKey === rule.statisticKey);
+              const advanced = ["points-per-unit", "one-time-threshold", "repeating-threshold", "tiered", "range-based", "position-specific", "maximum-award"].includes(rule.calculationType);
+              return (
+                <div className={`scoring-rule ${rule.enabled ? "enabled" : ""}`} key={rule.statisticKey}>
+                  <label className="rule-toggle" title={rule.enabled ? "Disable rule" : "Enable rule"}>
+                    <input type="checkbox" checked={rule.enabled} disabled={!canManage || !isDraft} onChange={(event) => updateRule(index, { enabled: event.target.checked })} />
+                    <i aria-hidden="true" />
+                  </label>
+                  <div className="rule-identity"><strong>{rule.displayName}</strong><span>{rule.description}</span></div>
+                  <select aria-label={`${rule.displayName} calculation`} value={rule.calculationType} disabled={!canManage || !isDraft} onChange={(event) => updateRule(index, { calculationType: event.target.value as ScoringCalculationType })}>
+                    {(definition?.allowedCalculationTypes ?? [rule.calculationType]).map((type) => <option value={type} key={type}>{calculationLabel(type)}</option>)}
+                  </select>
+                  <label className="points-input"><input aria-label={`${rule.displayName} points`} inputMode="decimal" value={rule.pointValue} disabled={!canManage || !isDraft} onChange={(event) => updateRule(index, { pointValue: event.target.value })} /><span>pts</span></label>
+                  {advanced && rule.enabled && (
+                    <div className="rule-advanced">
+                      {rule.calculationType === "points-per-unit" && <CompactInput label="Per units" value={rule.incrementValue ?? "1"} disabled={!canManage || !isDraft} onChange={(value) => updateRule(index, { incrementValue: value })} />}
+                      {["one-time-threshold", "repeating-threshold", "minimum-requirement"].includes(rule.calculationType) && <CompactInput label="Threshold" value={rule.thresholdValue ?? ""} disabled={!canManage || !isDraft} onChange={(value) => updateRule(index, { thresholdValue: value })} />}
+                      {["repeating-threshold", "maximum-award"].includes(rule.calculationType) && <CompactInput label="Max awards" type="number" value={String(rule.maxAwards ?? 1)} disabled={!canManage || !isDraft} onChange={(value) => updateRule(index, { maxAwards: Number(value) })} />}
+                      {rule.calculationType === "position-specific" && definition && (
+                        <div className="position-options"><span>Positions</span>{definition.allowedPositions.map((position) => <label key={position}><input type="checkbox" disabled={!canManage || !isDraft} checked={rule.positions.includes(position)} onChange={(event) => updateRule(index, { positions: event.target.checked ? [...rule.positions, position] : rule.positions.filter((item) => item !== position) })} />{position}</label>)}</div>
+                      )}
+                      {["tiered", "range-based"].includes(rule.calculationType) && (
+                        <TierEditor rule={rule} disabled={!canManage || !isDraft} onChange={(tiers) => updateRule(index, { tiers })} />
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </section>
+        ))}
+      </div>
+
+      {canManage && isDraft && configuration && (
+        <section className="scoring-apply">
+          <div className="scoring-subheading"><div><p className="eyebrow">Change control</p><h3>Preview and apply</h3><p>Choose when this version takes effect. Retroactive scopes queue affected weeks for recalculation.</p></div><Calculator size={20} /></div>
+          <div className="apply-controls">
+            <Field label="Effective scope"><select value={effectiveScope} onChange={(event) => { setEffectiveScope(event.target.value as ScoringEffectiveScope); setPreview(null); }}>{effectiveScopeOptions.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></Field>
+            {(effectiveScope === "next-week" || effectiveScope === "unstarted-weeks" || effectiveScope === "selected-future-weeks") && <Field label="Starts in week"><input type="number" min={1} max={18} value={fromWeek} onChange={(event) => { setFromWeek(Number(event.target.value)); setPreview(null); }} /></Field>}
+            {effectiveScope === "selected-future-weeks" && <Field label="Ends after week"><input type="number" min={fromWeek} max={18} value={toWeek} onChange={(event) => { setToWeek(Number(event.target.value)); setPreview(null); }} /></Field>}
+            <button className="outline-button preview-button" type="button" disabled={busy} onClick={() => void saveAndPreview()}><Calculator size={17} /> Save and preview</button>
+          </div>
+          {preview && (
+            <div className="scoring-preview">
+              <div className="preview-summary"><strong>{preview.changedRuleCount} rule{preview.changedRuleCount === 1 ? "" : "s"} changed</strong><span>{preview.affectedWeeks.length ? `Weeks ${preview.affectedWeeks.join(", ")}` : "Begins next season"}</span></div>
+              {preview.recalculationRequired && <p className="recalculation-note">Existing results in the selected weeks will be queued for recalculation.</p>}
+              <p className="preview-data-note">{preview.sampleStatus}</p>
+              <div className="difference-list">{preview.differences.length ? preview.differences.map((difference) => <div key={difference.statisticKey}><strong>{difference.displayName}</strong><span>{difference.currentValue ?? "Not configured"}</span><ArrowRight size={14} /><span>{difference.proposedValue ?? "Removed"}</span></div>) : <p>No rule values differ from the official version.</p>}</div>
+              <Field label="Reason for change" wide><textarea maxLength={300} value={changeReason} onChange={(event) => setChangeReason(event.target.value)} placeholder="Explain this change for the league audit log." /></Field>
+              <button className="primary-button apply-button" type="button" disabled={busy || changeReason.trim().length < 3} onClick={() => void apply()}><Check size={17} /> Apply scoring version</button>
+            </div>
+          )}
+        </section>
+      )}
+
+      <section className="scoring-history">
+        <div className="scoring-subheading"><div><h3>Version history</h3><p>Applied configurations remain available as an audit trail.</p></div><History size={20} /></div>
+        <div>{versions.map((version) => <p key={version.scoringVersionId}><strong>Version {version.versionNumber}</strong><span>{version.status}</span><small>{version.changeReason ?? presetLabel(version.sourcePresetKey ?? "custom")}</small><time>{formatDate(version.appliedAtUtc ?? version.createdAtUtc)}</time></p>)}</div>
+      </section>
+    </section>
+  );
+}
+
+function CompactInput({ label, value, type = "text", disabled, onChange }: { label: string; value: string; type?: "text" | "number"; disabled: boolean; onChange: (value: string) => void }) {
+  return <label className="compact-input"><span>{label}</span><input type={type} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} /></label>;
+}
+
+function TierEditor({ rule, disabled, onChange }: { rule: ScoringRule; disabled: boolean; onChange: (tiers: ScoringRule["tiers"]) => void }) {
+  const tiers = rule.tiers.length ? rule.tiers : [{ minimum: "", maximum: "", points: rule.pointValue }];
+  function update(index: number, values: Partial<ScoringRule["tiers"][number]>) {
+    onChange(tiers.map((tier, tierIndex) => tierIndex === index ? { ...tier, ...values } : tier));
+  }
+  return (
+    <div className="tier-editor">
+      <span>Scoring tiers</span>
+      {tiers.map((tier, index) => <div key={index}><input aria-label={`Tier ${index + 1} minimum`} placeholder="Min" value={tier.minimum} disabled={disabled} onChange={(event) => update(index, { minimum: event.target.value })} /><input aria-label={`Tier ${index + 1} maximum`} placeholder="Max" value={tier.maximum ?? ""} disabled={disabled} onChange={(event) => update(index, { maximum: event.target.value || undefined })} /><input aria-label={`Tier ${index + 1} points`} placeholder="Points" value={tier.points} disabled={disabled} onChange={(event) => update(index, { points: event.target.value })} />{!disabled && <button className="icon-button" type="button" onClick={() => onChange(tiers.filter((_, tierIndex) => tierIndex !== index))} aria-label={`Remove tier ${index + 1}`}><X size={15} /></button>}</div>)}
+      {!disabled && <button className="tier-add" type="button" onClick={() => onChange([...tiers, { minimum: "", maximum: "", points: "0" }])}><Plus size={14} /> Add tier</button>}
+    </div>
+  );
+}
+
+function groupRules(rules: ScoringRule[]): Array<[string, Array<{ rule: ScoringRule; index: number }>]> {
+  const groups = new Map<string, Array<{ rule: ScoringRule; index: number }>>();
+  rules.forEach((rule, index) => groups.set(rule.category, [...(groups.get(rule.category) ?? []), { rule, index }]));
+  return [...groups.entries()];
+}
+
+function calculationLabel(value: ScoringCalculationType): string {
+  return value.split("-").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+}
+
+const effectiveScopeOptions: Array<[ScoringEffectiveScope, string]> = [
+  ["next-week", "Next selected week"],
+  ["unstarted-weeks", "Selected week and all later weeks"],
+  ["selected-future-weeks", "Selected future week range"],
+  ["retroactive-current-season", "Entire current season, including completed weeks"],
+  ["entire-season", "Entire season"],
+  ["next-season", "Next season"],
+];
 
 function SettingsView({
   league,
@@ -930,7 +1241,14 @@ function formatRole(role: string): string {
 }
 
 function formatLabel(format: LeagueFormat): string {
-  return format === "best-ball" ? "Best Ball" : format.charAt(0).toUpperCase() + format.slice(1);
+  const labels: Record<LeagueFormat, string> = {
+    "single-season": "Single Season",
+    redraft: "Redraft",
+    keeper: "Keeper",
+    dynasty: "Dynasty",
+    "best-ball": "Best Ball",
+  };
+  return labels[format];
 }
 
 function presetLabel(preset: string): string {

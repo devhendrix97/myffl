@@ -23,6 +23,7 @@ import {
 } from "./auth";
 import { ApiException, corsHeaders, errorJson, isAllowedOrigin, json, readJson } from "./http";
 import { handleLeagueRequest } from "./league";
+import { handleScoringRequest } from "./scoring";
 
 export default {
   async fetch(request, env, ctx): Promise<Response> {
@@ -101,7 +102,7 @@ async function routeRequest(
         service: "myffl-api",
         environment: env.ENVIRONMENT,
         status: "healthy",
-        version: "0.3.0",
+        version: "0.4.0",
         utc: new Date().toISOString(),
       } satisfies HealthResponse,
     };
@@ -147,6 +148,8 @@ async function routeRequest(
       correlationId,
     );
   }
+  const scoringResult = await handleScoringRequest(request, url, env, ctx, correlationId);
+  if (scoringResult) return scoringResult;
   const leagueResult = await handleLeagueRequest(request, url, env, ctx, correlationId);
   if (leagueResult) return leagueResult;
   return undefined;
@@ -154,8 +157,8 @@ async function routeRequest(
 
 function phaseStatus(): PhaseStatusResponse {
   return {
-    phase: "phase-2",
-    title: "Scalable League Management",
+    phase: "phase-3",
+    title: "Custom Scoring Engine",
     items: [
       {
         key: "cloudflare-resources",
@@ -180,6 +183,18 @@ function phaseStatus(): PhaseStatusResponse {
         label: "Shard routing",
         status: "available",
         summary: "The core directory resolves each league without exposing shard locations to clients.",
+      },
+      {
+        key: "scoring-catalog",
+        label: "Scoring catalog and presets",
+        status: "available",
+        summary: "Plain-language statistics and six editable starting presets are available.",
+      },
+      {
+        key: "scoring-versioning",
+        label: "Scoring drafts and versions",
+        status: "available",
+        summary: "Commissioners can edit, preview, audit, and apply versioned scoring rules.",
       },
     ],
   };

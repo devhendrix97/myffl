@@ -73,10 +73,10 @@
 
         <ScrollViewer Grid.Column="1" Padding="28">
             <StackPanel>
-                <TextBlock Text="PHASE 2 - LEAGUE MANAGEMENT" Foreground="#60A5FA" FontWeight="Bold" FontSize="14"/>
-                <TextBlock Text="Your league command center is online." Foreground="#FFFFFF"
+                <TextBlock Text="PHASE 3 - CUSTOM SCORING" Foreground="#60A5FA" FontWeight="Bold" FontSize="14"/>
+                <TextBlock Text="Your scoring command center is online." Foreground="#FFFFFF"
                            FontSize="38" FontWeight="Bold" Margin="0,8,0,10"/>
-                <TextBlock Text="Create leagues, invite managers, define rosters and schedules, and manage commissioner settings through the shared myFFL platform."
+                <TextBlock Text="Create leagues, explain every scoring model, customize exact rule values, and preview versioned changes through the shared myFFL platform."
                            Foreground="{StaticResource MutedTextBrush}" FontSize="16" Width="690" HorizontalAlignment="Left"
                            TextWrapping="Wrap" Margin="0,0,0,18"/>
 
@@ -102,8 +102,8 @@
                     </Border>
                     <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource PanelBorderBrush}" BorderThickness="1" Padding="18">
                         <StackPanel>
-                            <TextBlock Text="Commissioner Controls" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
-                            <TextBlock Text="Rosters, schedules, revisions" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
+                            <TextBlock Text="Custom Scoring" Foreground="#FFFFFF" FontWeight="Bold" FontSize="18"/>
+                            <TextBlock Text="Rules, previews, and versions" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
                             <TextBlock Text="Available" Foreground="#22C55E" FontWeight="Bold" Margin="0,18,0,0"/>
                         </StackPanel>
                     </Border>
@@ -117,7 +117,7 @@
                         <StackPanel>
                             <TextBlock Text="- Authentication lifecycle: available" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
                             <TextBlock Text="- League management: available" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
-                            <TextBlock Text="- Custom scoring editor: planned for Phase 3" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
+                            <TextBlock Text="- Custom scoring editor: available" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
                             <TextBlock Text="- ESPN synchronization: planned for Phase 4" Foreground="{StaticResource MutedTextBrush}"/>
                         </StackPanel>
                     </StackPanel>

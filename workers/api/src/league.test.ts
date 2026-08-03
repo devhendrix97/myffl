@@ -41,6 +41,11 @@ describe("league creation validation", () => {
     expect(result.rosterSlots).toHaveLength(4);
   });
 
+  it("accepts a one-off single-season league", () => {
+    const result = validateCreateLeagueRequest({ ...validLeague(), format: "single-season" });
+    expect(result.format).toBe("single-season");
+  });
+
   it("rejects a team count outside platform rules", () => {
     expect(() => validateCreateLeagueRequest({ ...validLeague(), teamCount: 2 })).toThrow(
       "League size must be between 4 and 32 teams.",
