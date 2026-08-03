@@ -14,6 +14,7 @@ describe("password hashing", () => {
   it("accepts the original password and rejects a different password", async () => {
     const hash = await hashPassword("StrongPassword123");
 
+    expect(hash).toMatch(/^pbkdf2_sha256\$100000\$/);
     await expect(verifyPassword("StrongPassword123", hash)).resolves.toBe(true);
     await expect(verifyPassword("DifferentPassword123", hash)).resolves.toBe(false);
   });

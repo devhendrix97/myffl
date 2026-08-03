@@ -3,6 +3,7 @@ import { jwtVerify, SignJWT } from "jose";
 const encoder = new TextEncoder();
 const accessTokenIssuer = "https://api.myfflapp.com";
 const accessTokenAudience = "myffl-clients";
+const passwordHashIterations = 100000;
 
 export interface AccessTokenPrincipal {
   userId: string;
@@ -32,11 +33,11 @@ export async function hashPassword(password: string): Promise<string> {
     ["deriveBits"],
   );
   const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt, iterations: 210000, hash: "SHA-256" },
+    { name: "PBKDF2", salt, iterations: passwordHashIterations, hash: "SHA-256" },
     key,
     256,
   );
-  return `pbkdf2_sha256$210000$${toBase64(salt)}$${toBase64(new Uint8Array(bits))}`;
+  return `pbkdf2_sha256$${passwordHashIterations}$${toBase64(salt)}$${toBase64(new Uint8Array(bits))}`;
 }
 
 export async function verifyPassword(
