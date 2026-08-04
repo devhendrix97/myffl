@@ -35,6 +35,7 @@ import { handleRealtimeRequest } from "./realtime";
 import { handleMatchupRequest } from "./matchups";
 import { handleCommunicationRequest } from "./communication";
 import { handleNotificationRequest, processNotificationQueue, type NotificationJob } from "./notifications";
+import { handleFantasyProsRequest, syncFantasyProsIfDue } from "./fantasypros";
 export { LeagueRealtime, LiveNflEvent, MatchupRealtime } from "./realtime";
 
 export default {
@@ -101,7 +102,7 @@ export default {
     }
   },
   async scheduled(_controller, env, ctx): Promise<void> {
-    ctx.waitUntil(Promise.all([enqueueScheduledProviderWork(env), processExpiredDrafts(env), enqueueDueWaivers(env), processDueTrades(env)]).then(() => undefined));
+    ctx.waitUntil(Promise.all([enqueueScheduledProviderWork(env), syncFantasyProsIfDue(env), processExpiredDrafts(env), enqueueDueWaivers(env), processDueTrades(env)]).then(() => undefined));
   },
   async queue(batch, env): Promise<void> {
     if (batch.queue === "myffl-espn-updates") {
@@ -135,7 +136,7 @@ async function routeRequest(
         service: "myffl-api",
         environment: env.ENVIRONMENT,
         status: "healthy",
-        version: "1.0.0",
+        version: "1.1.0",
         utc: new Date().toISOString(),
       } satisfies HealthResponse,
     };
@@ -201,6 +202,8 @@ async function routeRequest(
   if (communicationResult) return communicationResult;
   const notificationResult = await handleNotificationRequest(request, url, env);
   if (notificationResult) return notificationResult;
+  const fantasyProsResult = await handleFantasyProsRequest(request, url, env);
+  if (fantasyProsResult) return fantasyProsResult;
   const leagueResult = await handleLeagueRequest(request, url, env, ctx, correlationId);
   if (leagueResult) return leagueResult;
   return undefined;
@@ -342,6 +345,12 @@ function phaseStatus(): PhaseStatusResponse {
         label: "Native desktop workspace",
         status: "available",
         summary: "The WPF client hosts the production workspace with navigation, shortcuts, report export, offline state, and a dockable matchup view.",
+      },
+      {
+        key: "expert-draft-rankings",
+        label: "Expert draft rankings",
+        status: "available",
+        summary: "Licensed FantasyPros ECR snapshots can order draft and player lists by league scoring with server-side caching and a strict daily request budget.",
       },
     ],
   };

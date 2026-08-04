@@ -33,3 +33,5 @@ dotnet build myFFL.slnx --configuration Release
 ```
 
 Operational procedures are in [deployment](docs/deployment.md), [backup and restore](docs/backup-restore.md), [testing](docs/testing.md), [security](docs/security.md), and [troubleshooting](docs/troubleshooting.md).
+
+The optional, licensed expert-ranking provider and its request-budget controls are documented in [FantasyPros rankings](docs/fantasypros-rankings.md).

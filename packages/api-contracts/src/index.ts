@@ -369,6 +369,10 @@ export interface DraftPlayerView {
   rank: number;
   queued: boolean;
   drafted: boolean;
+  expertConsensusRank?: number;
+  positionRank?: string;
+  tier?: number;
+  rankingUpdatedAt?: string;
 }
 
 export interface DraftRoomResponse {
@@ -468,6 +472,29 @@ export interface LeaguePlayerSearchItem {
   rosteredByTeamId?: string;
   rosteredByTeamName?: string;
   watched: boolean;
+  expertConsensusRank?: number;
+  positionRank?: string;
+  tier?: number;
+  rankingUpdatedAt?: string;
+}
+
+export interface FantasyProsRankingsResponse {
+  seasonYear: number;
+  scoring: "STD" | "HALF" | "PPR";
+  sourceName: "FantasyPros Expert Consensus Rankings";
+  sourceUrl: string;
+  fetchedAtUtc?: string;
+  players: Array<{
+    playerId: string;
+    displayName: string;
+    nflTeam?: string;
+    position: string;
+    overallRank: number;
+    positionRank?: string;
+    tier?: number;
+    sourceUpdatedAt?: string;
+    fetchedAtUtc: string;
+  }>;
 }
 
 export type AcquisitionMode = "free-agent" | "waivers" | "faab";

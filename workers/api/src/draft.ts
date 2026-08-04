@@ -13,6 +13,7 @@ import { ApiException, readJson } from "./http";
 import { getLeagueRow, requireLeagueRole } from "./league";
 import { newId, type AccessTokenPrincipal } from "./security";
 import { enqueueLeagueNotification } from "./notifications";
+import { rankingContext, rankingsForPlayers, type FantasyProsRanking } from "./fantasypros";
 
 const managerRoles = ["commissioner", "co-commissioner", "manager"] as const;
 const commissionerRoles = ["commissioner", "co-commissioner"] as const;
@@ -209,11 +210,16 @@ async function searchDraftPlayers(context: DraftContext, env: Env, url: URL): Pr
      from nfl_players players left join nfl_teams teams on teams.nfl_team_id = players.current_team_id
      where ${conditions.join(" and ")} order by players.display_name limit ${Math.max(limit * 3, 300)}`,
   ).bind(...bindings).all<PlayerRow>();
-  const weights = await positionWeights(context.db, context.seasonId);
-  return (result.results ?? []).map((player) => ({ player, score: weights.get(player.position ?? "") ?? 0 }))
-    .sort((left, right) => right.score - left.score || left.player.display_name.localeCompare(right.player.display_name))
+  const profiles = result.results ?? [];
+  const ranking = await rankingContext(context.db, context.leagueId, context.seasonId);
+  const [weights, rankings] = await Promise.all([
+    positionWeights(context.db, context.seasonId),
+    rankingsForPlayers(env.NFL_DB, ranking.seasonYear, ranking.scoring, profiles.map((player) => player.nfl_player_id)),
+  ]);
+  return profiles.map((player) => ({ player, ranking: rankings.get(player.nfl_player_id), score: weights.get(player.position ?? "") ?? 0 }))
+    .sort((left, right) => (left.ranking?.overallRank ?? 99999) - (right.ranking?.overallRank ?? 99999) || right.score - left.score || left.player.display_name.localeCompare(right.player.display_name))
     .slice(0, limit)
-    .map((item, index) => playerView(item.player, index + 1, queue.has(item.player.nfl_player_id), drafted.has(item.player.nfl_player_id)));
+    .map((item, index) => playerView(item.player, item.ranking?.overallRank ?? index + 1, queue.has(item.player.nfl_player_id), drafted.has(item.player.nfl_player_id), item.ranking));
 }
 
 async function saveSetup(context: DraftContext, env: Env, body: DraftSetupRequest, correlationId: string): Promise<void> {
@@ -442,8 +448,13 @@ async function chooseAutopick(context: DraftContext, env: Env): Promise<string |
      where queues.draft_id = ?1 and queues.fantasy_team_id = ?2 order by players.priority`,
   ).bind(context.draft.draft_id, team.fantasy_team_id).all<{ nfl_player_id: string }>();
   const fallback = await env.NFL_DB.prepare("select nfl_player_id, display_name, position, null as abbreviation from nfl_players where position is not null order by display_name limit 800").all<PlayerRow>();
-  const weights = await positionWeights(context.db, context.seasonId);
-  const candidates = [...(queued.results ?? []).map((row) => row.nfl_player_id), ...(fallback.results ?? []).sort((a, b) => (weights.get(b.position ?? "") ?? 0) - (weights.get(a.position ?? "") ?? 0) || a.display_name.localeCompare(b.display_name)).map((row) => row.nfl_player_id)];
+  const profiles = fallback.results ?? [];
+  const ranking = await rankingContext(context.db, context.leagueId, context.seasonId);
+  const [weights, rankings] = await Promise.all([
+    positionWeights(context.db, context.seasonId),
+    rankingsForPlayers(env.NFL_DB, ranking.seasonYear, ranking.scoring, profiles.map((player) => player.nfl_player_id)),
+  ]);
+  const candidates = [...(queued.results ?? []).map((row) => row.nfl_player_id), ...profiles.sort((a, b) => (rankings.get(a.nfl_player_id)?.overallRank ?? 99999) - (rankings.get(b.nfl_player_id)?.overallRank ?? 99999) || (weights.get(b.position ?? "") ?? 0) - (weights.get(a.position ?? "") ?? 0) || a.display_name.localeCompare(b.display_name)).map((row) => row.nfl_player_id)];
   for (const playerId of candidates) {
     if (unavailable.has(playerId)) continue;
     const player = await env.NFL_DB.prepare("select position from nfl_players where nfl_player_id = ?1").bind(playerId).first<{ position: string | null }>();
@@ -484,7 +495,7 @@ async function refreshContext(context: DraftContext): Promise<DraftContext> { co
 async function loadTeams(db: D1Database, draftId: string): Promise<TeamRow[]> { const result = await db.prepare(`select teams.fantasy_team_id, teams.team_name, teams.manager_user_id, slots.slot_number from draft_slots slots join fantasy_teams teams on teams.fantasy_team_id = slots.fantasy_team_id where slots.draft_id = ?1 order by slots.slot_number`).bind(draftId).all<TeamRow>(); return result.results ?? []; }
 function teamView(row: TeamRow): DraftTeamView { return { fantasyTeamId: row.fantasy_team_id, teamName: row.team_name, managerUserId: row.manager_user_id, slotNumber: row.slot_number }; }
 function pickView(row: PickRow, player?: PlayerRow): DraftPickView { return { draftPickId: row.draft_pick_id, overallPick: row.overall_pick, roundNumber: row.round_number, slotNumber: row.slot_number, fantasyTeamId: row.fantasy_team_id, teamName: row.team_name, playerId: row.nfl_player_id ?? undefined, playerName: player?.display_name, position: player?.position ?? undefined, nflTeam: player?.abbreviation ?? undefined, selectionSource: row.selection_source, status: row.status, madeAtUtc: row.made_at_utc }; }
-function playerView(row: PlayerRow, rank: number, queued: boolean, drafted: boolean): DraftPlayerView { return { playerId: row.nfl_player_id, displayName: row.display_name, position: row.position ?? "UNK", nflTeam: row.abbreviation ?? undefined, rank, queued, drafted }; }
+function playerView(row: PlayerRow, rank: number, queued: boolean, drafted: boolean, ranking?: FantasyProsRanking): DraftPlayerView { return { playerId: row.nfl_player_id, displayName: row.display_name, position: row.position ?? "UNK", nflTeam: row.abbreviation ?? undefined, rank, queued, drafted, expertConsensusRank: ranking?.overallRank, positionRank: ranking?.positionRank, tier: ranking?.tier, rankingUpdatedAt: ranking?.sourceUpdatedAt ?? ranking?.fetchedAtUtc }; }
 async function loadPlayerProfiles(db: D1Database, ids: string[]): Promise<Map<string, PlayerRow>> { if (!ids.length) return new Map(); const placeholders = ids.map((_, index) => `?${index + 1}`).join(","); const result = await db.prepare(`select players.nfl_player_id, players.display_name, players.position, teams.abbreviation from nfl_players players left join nfl_teams teams on teams.nfl_team_id = players.current_team_id where players.nfl_player_id in (${placeholders})`).bind(...ids).all<PlayerRow>(); return new Map((result.results ?? []).map((row) => [row.nfl_player_id, row])); }
 async function loadQueuePlayerIds(context: DraftContext): Promise<Array<{ nfl_player_id: string }>> { const result = await context.db.prepare(`select players.nfl_player_id from draft_queue_players players join draft_queues queues on queues.draft_queue_id = players.draft_queue_id where queues.draft_id = ?1 and queues.user_id = ?2 order by players.priority`).bind(context.draft.draft_id, context.principal.userId).all<{ nfl_player_id: string }>(); return result.results ?? []; }
 async function positionWeights(db: D1Database, seasonId: string): Promise<Map<string, number>> { const weights = new Map(Object.entries({ QB: 90, RB: 82, WR: 80, TE: 70, K: 35, DST: 45, DL: 40, LB: 44, DB: 42 })); const rules = await db.prepare(`select rules.statistic_key, rules.point_value_milli from scoring_rules rules join scoring_versions versions on versions.scoring_version_id = rules.scoring_version_id where versions.league_season_id = ?1 and versions.status = 'active' and rules.enabled = 1`).bind(seasonId).all<{ statistic_key: string; point_value_milli: number }>(); for (const rule of rules.results ?? []) { if (rule.statistic_key === "receptions") { weights.set("RB", (weights.get("RB") ?? 0) + rule.point_value_milli / 1000); weights.set("WR", (weights.get("WR") ?? 0) + rule.point_value_milli / 1000); weights.set("TE", (weights.get("TE") ?? 0) + rule.point_value_milli / 1000); } if (rule.statistic_key === "tight_end_reception_bonus") weights.set("TE", (weights.get("TE") ?? 0) + rule.point_value_milli / 500); if (rule.statistic_key.startsWith("idp_")) ["DL", "LB", "DB"].forEach((position) => weights.set(position, (weights.get(position) ?? 0) + 8)); } return weights; }

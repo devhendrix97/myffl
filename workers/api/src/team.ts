@@ -4,6 +4,7 @@ import { ApiException, readJson } from "./http";
 import { getLeagueRow, requireLeagueRole } from "./league";
 import { getProviderRuntime } from "./game-feed";
 import { newId, type AccessTokenPrincipal } from "./security";
+import { rankingContext, rankingsForPlayers } from "./fantasypros";
 
 interface RosterRow { fantasy_roster_player_id: string; nfl_player_id: string; position: string; }
 interface AssignmentRow extends RosterRow { slot_type: string; slot_index: number; }
@@ -99,8 +100,12 @@ async function searchPlayers(principal: AccessTokenPrincipal, db: D1Database, se
      from nfl_players players left join nfl_teams teams on teams.nfl_team_id = players.current_team_id
      where (?1 = '' or players.display_name like ?2) and (?3 = '' or players.position = ?3)
      order by players.display_name limit ?4`,
-  ).bind(query, `%${query}%`, position, limit).all<ProfileRow>();
-  const profiles = result.results ?? [];
+  ).bind(query, `%${query}%`, position, 900).all<ProfileRow>();
+  const allProfiles = result.results ?? [];
+  const league = await db.prepare("select league_id from league_seasons where league_season_id=?1").bind(seasonId).first<{ league_id: string }>();
+  const ranking = await rankingContext(db, league?.league_id ?? "", seasonId);
+  const rankings = await rankingsForPlayers(env.NFL_DB, ranking.seasonYear, ranking.scoring, allProfiles.map((profile) => profile.nfl_player_id));
+  const profiles = allProfiles.sort((left, right) => (rankings.get(left.nfl_player_id)?.overallRank ?? 99999) - (rankings.get(right.nfl_player_id)?.overallRank ?? 99999) || left.display_name.localeCompare(right.display_name)).slice(0, limit);
   if (!profiles.length) return [];
   const ids = profiles.map((profile) => profile.nfl_player_id);
   const placeholders = ids.map((_, index) => `?${index + 2}`).join(",");
@@ -114,7 +119,8 @@ async function searchPlayers(principal: AccessTokenPrincipal, db: D1Database, se
   const watched = new Set((watches.results ?? []).map((row) => row.nfl_player_id));
   return profiles.filter((profile) => !watchedOnly || watched.has(profile.nfl_player_id)).map((profile) => {
     const owner = ownerMap.get(profile.nfl_player_id);
-    return { playerId: profile.nfl_player_id, displayName: profile.display_name, position: profile.position ?? "UNK", nflTeam: profile.abbreviation ?? undefined, injuryStatus: injuries.get(profile.nfl_player_id), rosteredByTeamId: owner?.fantasy_team_id, rosteredByTeamName: owner?.team_name, watched: watched.has(profile.nfl_player_id) };
+    const expert = rankings.get(profile.nfl_player_id);
+    return { playerId: profile.nfl_player_id, displayName: profile.display_name, position: profile.position ?? "UNK", nflTeam: profile.abbreviation ?? undefined, injuryStatus: injuries.get(profile.nfl_player_id), rosteredByTeamId: owner?.fantasy_team_id, rosteredByTeamName: owner?.team_name, watched: watched.has(profile.nfl_player_id), expertConsensusRank: expert?.overallRank, positionRank: expert?.positionRank, tier: expert?.tier, rankingUpdatedAt: expert?.sourceUpdatedAt ?? expert?.fetchedAtUtc };
   });
 }
 
