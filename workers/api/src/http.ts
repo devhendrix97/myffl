@@ -3,6 +3,12 @@ import type { ApiEnvelope, ApiError } from "@myffl/api-contracts";
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "no-store",
+  "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+  "permissions-policy": "camera=(), microphone=(), geolocation=()",
+  "referrer-policy": "no-referrer",
+  "strict-transport-security": "max-age=31536000; includeSubDomains",
+  "x-content-type-options": "nosniff",
+  "x-frame-options": "DENY",
 };
 
 export class ApiException extends Error {
@@ -68,6 +74,8 @@ export function isAllowedOrigin(origin: string, env: Env): boolean {
     env.APPLICATION_BASE_URL,
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
   ]);
   return allowed.has(origin);
 }

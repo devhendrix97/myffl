@@ -1167,6 +1167,19 @@ textarea {
   min-height: 100dvh;
 }
 
+.offline-banner {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  border-bottom: 1px solid #b91c1c;
+  background: #3a1118;
+  padding: 9px 16px;
+  color: #fecaca;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
 .league-topbar {
   height: 72px;
   display: flex;

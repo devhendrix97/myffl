@@ -1,4 +1,4 @@
-const SHELL_CACHE = "myffl-shell-v2";
+const SHELL_CACHE = "myffl-shell-v3";
 const DATA_CACHE = "myffl-data-v1";
 const SHELL = ["/", "/manifest.webmanifest"];
 

@@ -135,7 +135,7 @@ async function routeRequest(
         service: "myffl-api",
         environment: env.ENVIRONMENT,
         status: "healthy",
-        version: "0.12.0",
+        version: "1.0.0",
         utc: new Date().toISOString(),
       } satisfies HealthResponse,
     };
@@ -208,8 +208,8 @@ async function routeRequest(
 
 function phaseStatus(): PhaseStatusResponse {
   return {
-    phase: "phase-11",
-    title: "Administration",
+    phase: "release-1",
+    title: "Production release",
     items: [
       {
         key: "cloudflare-resources",
@@ -336,6 +336,12 @@ function phaseStatus(): PhaseStatusResponse {
         label: "Platform administration",
         status: "available",
         summary: "Role-gated user, league, player, event, scoring investigation, correction, audit, replay, and monitoring tools are available.",
+      },
+      {
+        key: "native-desktop",
+        label: "Native desktop workspace",
+        status: "available",
+        summary: "The WPF client hosts the production workspace with navigation, shortcuts, report export, offline state, and a dockable matchup view.",
       },
     ],
   };

@@ -130,29 +130,60 @@ class LeagueApiError extends Error {
   }
 }
 
+let cacheNamespace = "signed-out";
+
+function rememberLastKnown<T>(key: string, data: T): void {
+  try {
+    localStorage.setItem(key, JSON.stringify({ cachedAt: new Date().toISOString(), data }));
+    const indexKey = `myffl:last-known:index:${cacheNamespace}`;
+    const previous = JSON.parse(localStorage.getItem(indexKey) ?? "[]") as string[];
+    const next = [key, ...previous.filter((item) => item !== key)];
+    for (const expired of next.slice(80)) localStorage.removeItem(expired);
+    localStorage.setItem(indexKey, JSON.stringify(next.slice(0, 80)));
+  } catch { /* Storage can be unavailable or full. */ }
+}
+
 async function leagueRequest<T>(
   path: string,
   accessToken: string,
   options: { method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; body?: unknown } = {},
 ): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
-    method: options.method ?? "GET",
-    credentials: "include",
-    headers: {
-      authorization: `Bearer ${accessToken}`,
-      ...(options.body === undefined ? {} : { "content-type": "application/json" }),
-    },
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  });
-  const payload = (await response.json()) as ApiEnvelope<T>;
-  if (!response.ok || !payload.ok || !payload.data) {
-    throw new LeagueApiError(
-      payload.error?.message ?? "The request could not be completed.",
-      payload.error?.code ?? "request_failed",
-      response.status,
-    );
+  const method = options.method ?? "GET";
+  const cacheKey = `myffl:last-known:${cacheNamespace}:${path}`;
+  if (method !== "GET" && !navigator.onLine) {
+    throw new LeagueApiError("Changes are unavailable while offline. Reconnect and try again.", "offline_read_only", 503);
   }
-  return payload.data;
+  try {
+    const response = await fetch(`${apiBaseUrl}${path}`, {
+      method,
+      credentials: "include",
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        ...(options.body === undefined ? {} : { "content-type": "application/json" }),
+      },
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    });
+    const payload = (await response.json()) as ApiEnvelope<T>;
+    if (!response.ok || !payload.ok || !payload.data) {
+      throw new LeagueApiError(
+        payload.error?.message ?? "The request could not be completed.",
+        payload.error?.code ?? "request_failed",
+        response.status,
+      );
+    }
+    if (method === "GET") {
+      rememberLastKnown(cacheKey, payload.data);
+    }
+    return payload.data;
+  } catch (error) {
+    if (method === "GET") {
+      try {
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) return (JSON.parse(cached) as { data: T }).data;
+      } catch { /* Ignore corrupt or inaccessible cache entries. */ }
+    }
+    throw error;
+  }
 }
 
 export function LeagueWorkspace({
@@ -162,14 +193,19 @@ export function LeagueWorkspace({
   session: AuthSessionResponse;
   onLogout: () => Promise<void>;
 }) {
+  cacheNamespace = session.userId;
+  const initialParams = new URLSearchParams(window.location.search);
+  const requestedView = initialParams.get("view");
   const [view, setView] = useState<WorkspaceView>(() =>
-    new URLSearchParams(window.location.search).has("join") ? "join" : "home",
+    initialParams.has("join") ? "join" : requestedView === "game" ? "game" : "home",
   );
   const [leagues, setLeagues] = useState<LeagueSummary[]>([]);
   const [selectedLeague, setSelectedLeague] = useState<LeagueDetail | null>(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [online, setOnline] = useState(navigator.onLine);
+  const requestedLeagueOpened = useRef(false);
 
   useEffect(() => {
     loadLeagues();
@@ -178,6 +214,21 @@ export function LeagueWorkspace({
   useEffect(() => {
     if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js");
   }, []);
+
+  useEffect(() => {
+    const connected = () => setOnline(true);
+    const disconnected = () => setOnline(false);
+    window.addEventListener("online", connected);
+    window.addEventListener("offline", disconnected);
+    return () => { window.removeEventListener("online", connected); window.removeEventListener("offline", disconnected); };
+  }, []);
+
+  useEffect(() => {
+    if (requestedLeagueOpened.current || leagues.length === 0 || !initialParams.get("tab")) return;
+    requestedLeagueOpened.current = true;
+    const leagueId = initialParams.get("league") ?? leagues[0].leagueId;
+    void openLeague(leagueId);
+  }, [leagues]);
 
   async function loadLeagues() {
     setBusy(true);
@@ -267,6 +318,7 @@ export function LeagueWorkspace({
       {sidebarOpen && <button className="sidebar-scrim" type="button" onClick={() => setSidebarOpen(false)} aria-label="Close navigation" />}
 
       <section className="league-workspace">
+        {!online && <div className="offline-banner" role="status">Offline - showing last-known data. Changes are disabled until you reconnect.</div>}
         <header className="league-topbar">
           <button className="icon-button mobile-menu" type="button" onClick={() => setSidebarOpen(true)} aria-label="Open navigation">
             <Menu size={21} />
@@ -848,7 +900,9 @@ function LeagueDetailView({
   onBack: () => void;
   onChanged: (league: LeagueDetail) => void;
 }) {
-  const [tab, setTab] = useState<LeagueTab>("overview");
+  const requestedTab = new URLSearchParams(window.location.search).get("tab");
+  const tabs: LeagueTab[] = ["overview", "members", "team", "gameday", "players", "transactions", "draft", "chat", "scoring", "settings"];
+  const [tab, setTab] = useState<LeagueTab>(tabs.includes(requestedTab as LeagueTab) ? requestedTab as LeagueTab : "overview");
   const [invite, setInvite] = useState<LeagueInvitationResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -890,7 +944,7 @@ function LeagueDetailView({
         <span className={`league-state ${league.status}`}>{league.status}</span>
       </header>
       <div className="league-tabs" role="tablist">
-        {(["overview", "members", "team", "gameday", "players", "transactions", "draft", "chat", "scoring", "settings"] as LeagueTab[]).map((item) => (
+        {tabs.map((item) => (
           <button role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} type="button" key={item} onClick={() => setTab(item)}>{item}</button>
         ))}
       </div>
