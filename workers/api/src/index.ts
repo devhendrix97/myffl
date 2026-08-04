@@ -33,6 +33,8 @@ import { handleTeamRequest } from "./team";
 import { enqueueDueWaivers, handleTransactionRequest, processDueTrades, processWaiverQueue, type WaiverJob } from "./transactions";
 import { handleRealtimeRequest } from "./realtime";
 import { handleMatchupRequest } from "./matchups";
+import { handleCommunicationRequest } from "./communication";
+import { handleNotificationRequest, processNotificationQueue, type NotificationJob } from "./notifications";
 export { LeagueRealtime, LiveNflEvent, MatchupRealtime } from "./realtime";
 
 export default {
@@ -112,6 +114,10 @@ export default {
     }
     if (batch.queue === "myffl-waivers") {
       await processWaiverQueue(batch as MessageBatch<WaiverJob>, env);
+      return;
+    }
+    if (batch.queue === "myffl-notifications") {
+      await processNotificationQueue(batch as MessageBatch<NotificationJob>, env);
     }
   },
 } satisfies ExportedHandler<Env>;
@@ -129,7 +135,7 @@ async function routeRequest(
         service: "myffl-api",
         environment: env.ENVIRONMENT,
         status: "healthy",
-        version: "0.10.0",
+        version: "0.11.0",
         utc: new Date().toISOString(),
       } satisfies HealthResponse,
     };
@@ -191,6 +197,10 @@ async function routeRequest(
   if (transactionResult) return transactionResult;
   const matchupResult = await handleMatchupRequest(request, url, env, correlationId);
   if (matchupResult) return matchupResult;
+  const communicationResult = await handleCommunicationRequest(request, url, env, correlationId);
+  if (communicationResult) return communicationResult;
+  const notificationResult = await handleNotificationRequest(request, url, env);
+  if (notificationResult) return notificationResult;
   const leagueResult = await handleLeagueRequest(request, url, env, ctx, correlationId);
   if (leagueResult) return leagueResult;
   return undefined;
@@ -198,8 +208,8 @@ async function routeRequest(
 
 function phaseStatus(): PhaseStatusResponse {
   return {
-    phase: "phase-9",
-    title: "Real-Time Gameday",
+    phase: "phase-10",
+    title: "Communication and Notifications",
     items: [
       {
         key: "cloudflare-resources",
@@ -302,6 +312,24 @@ function phaseStatus(): PhaseStatusResponse {
         label: "Playoff brackets",
         status: "available",
         summary: "Seeded brackets support byes, multi-week totals, advancement, consolation play, and third-place matchups.",
+      },
+      {
+        key: "league-communication",
+        label: "League communication",
+        status: "available",
+        summary: "League and draft chat support replies, mentions, reactions, images, GIFs, polls, announcements, pins, and read indicators.",
+      },
+      {
+        key: "activity-reports",
+        label: "Activity and weekly reports",
+        status: "available",
+        summary: "Immutable league activity and persisted weekly highlights make important events and results easy to audit.",
+      },
+      {
+        key: "notification-delivery",
+        label: "Notification delivery",
+        status: "available",
+        summary: "Per-league preferences control in-app, desktop, browser push, and email notification delivery.",
       },
     ],
   };

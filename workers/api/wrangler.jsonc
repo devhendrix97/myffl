@@ -30,7 +30,9 @@
     "APPLICATION_BASE_URL": "http://localhost:5173",
     "API_BASE_URL": "http://localhost:8787",
     "EMAIL_FROM_ADDRESS": "noreply@myfflapp.com",
-    "EMAIL_FROM_NAME": "myFFL"
+    "EMAIL_FROM_NAME": "myFFL",
+    "VAPID_PUBLIC_KEY": "BK7W6VzzvZaghb-vUlky8D1p-utUc9TZsE3dIRpga_D-NBKlzxEFEZe0JnVOnKmIGEhJS9JaJmLMlWEgVR31CYA",
+    "VAPID_SUBJECT": "mailto:support@myfflapp.com"
   },
   "d1_databases": [
     {
@@ -106,6 +108,13 @@
         "max_batch_timeout": 5,
         "max_retries": 5,
         "dead_letter_queue": "myffl-dead-letter"
+      },
+      {
+        "queue": "myffl-notifications",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 5,
+        "dead_letter_queue": "myffl-dead-letter"
       }
     ]
   },
@@ -133,7 +142,9 @@
         "APPLICATION_BASE_URL": "https://app.myfflapp.com",
         "API_BASE_URL": "https://api.myfflapp.com",
         "EMAIL_FROM_ADDRESS": "noreply@myfflapp.com",
-        "EMAIL_FROM_NAME": "myFFL"
+        "EMAIL_FROM_NAME": "myFFL",
+        "VAPID_PUBLIC_KEY": "BK7W6VzzvZaghb-vUlky8D1p-utUc9TZsE3dIRpga_D-NBKlzxEFEZe0JnVOnKmIGEhJS9JaJmLMlWEgVR31CYA",
+        "VAPID_SUBJECT": "mailto:support@myfflapp.com"
       },
       "durable_objects": {
         "bindings": [
@@ -216,6 +227,13 @@
             "max_batch_timeout": 5,
             "max_retries": 5,
             "dead_letter_queue": "myffl-dead-letter"
+          },
+          {
+            "queue": "myffl-notifications",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_retries": 5,
+            "dead_letter_queue": "myffl-dead-letter"
           }
         ]
       },
@@ -249,7 +267,9 @@
         "APPLICATION_BASE_URL": "https://staging.myfflapp.com",
         "API_BASE_URL": "https://api-staging.myfflapp.com",
         "EMAIL_FROM_ADDRESS": "noreply@myfflapp.com",
-        "EMAIL_FROM_NAME": "myFFL"
+        "EMAIL_FROM_NAME": "myFFL",
+        "VAPID_PUBLIC_KEY": "BK7W6VzzvZaghb-vUlky8D1p-utUc9TZsE3dIRpga_D-NBKlzxEFEZe0JnVOnKmIGEhJS9JaJmLMlWEgVR31CYA",
+        "VAPID_SUBJECT": "mailto:support@myfflapp.com"
       },
       "durable_objects": {
         "bindings": [

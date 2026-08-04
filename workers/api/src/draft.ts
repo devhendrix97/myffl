@@ -12,6 +12,7 @@ import { authenticate, type HandlerResult } from "./auth";
 import { ApiException, readJson } from "./http";
 import { getLeagueRow, requireLeagueRole } from "./league";
 import { newId, type AccessTokenPrincipal } from "./security";
+import { enqueueLeagueNotification } from "./notifications";
 
 const managerRoles = ["commissioner", "co-commissioner", "manager"] as const;
 const commissionerRoles = ["commissioner", "co-commissioner"] as const;
@@ -67,7 +68,7 @@ export async function handleDraftRequest(
   }
   if (request.method === "PUT" && action === "setup") {
     requireCommissioner(context);
-    await saveSetup(context, await readJson<DraftSetupRequest>(request), correlationId);
+    await saveSetup(context, env, await readJson<DraftSetupRequest>(request), correlationId);
     return { data: await getDraftRoom(await refreshContext(context), env) };
   }
   if (request.method === "PUT" && action === "queue") {
@@ -215,7 +216,7 @@ async function searchDraftPlayers(context: DraftContext, env: Env, url: URL): Pr
     .map((item, index) => playerView(item.player, index + 1, queue.has(item.player.nfl_player_id), drafted.has(item.player.nfl_player_id)));
 }
 
-async function saveSetup(context: DraftContext, body: DraftSetupRequest, correlationId: string): Promise<void> {
+async function saveSetup(context: DraftContext, env: Env, body: DraftSetupRequest, correlationId: string): Promise<void> {
   requireRevision(context.draft, body.revisionNumber);
   if (!(["setup", "scheduled"] as string[]).includes(context.draft.status)) throw new ApiException(409, "draft_setup_locked", "Pause or reset the draft before changing setup.");
   if (!(["snake", "linear", "third-round-reversal", "offline"] as string[]).includes(body.draftType)) throw new ApiException(400, "invalid_draft_type", "Choose a supported draft type.");
@@ -242,7 +243,9 @@ async function saveSetup(context: DraftContext, body: DraftSetupRequest, correla
     "update draft_slots set slot_number = ?1 where draft_id = ?2 and fantasy_team_id = ?3",
   ).bind(index + 1, context.draft.draft_id, teamId)));
   statements.push(audit(context, "draft.setup.updated", "draft", context.draft.draft_id, correlationId, context.draft, body));
+  if (scheduled) statements.push(context.db.prepare("insert into league_activity (league_activity_id,league_id,actor_user_id,activity_type,message,created_at_utc,metadata_json) values (?1,?2,?3,'draft.scheduled',?4,?5,?6)").bind(newId("lga"),context.leagueId,context.principal.userId,`The draft was scheduled for ${scheduled.toISOString()}.`,now,JSON.stringify({draftId:context.draft.draft_id,scheduledAtUtc:scheduled.toISOString()})));
   await context.db.batch(statements);
+  if (scheduled) await enqueueLeagueNotification(env,context.leagueId,{notificationType:"draft-scheduled",title:"Draft scheduled",body:`Your league draft is scheduled for ${scheduled.toLocaleString()}.`,entityType:"draft",entityId:context.draft.draft_id,actionUrl:`/?league=${context.leagueId}&tab=draft`},{excludeUserIds:[context.principal.userId]});
 }
 
 async function makeDraftPick(context: DraftContext, env: Env, body: MakeDraftPickRequest, correlationId: string, source?: DraftPickView["selectionSource"]): Promise<void> {
@@ -282,9 +285,15 @@ async function makeDraftPick(context: DraftContext, env: Env, body: MakeDraftPic
          where draft_id = ?6 and revision_number = ?7`,
       ).bind(next.overallPick, next.status, next.deadline, next.status === "completed" ? now : null, now, context.draft.draft_id, body.revisionNumber),
       audit(context, "draft.pick.made", "draft_pick", pickId, correlationId, null, { playerId: player.nfl_player_id, playerName: player.display_name, teamId: team.fantasy_team_id, overallPick: context.draft.current_overall_pick, source: selectionSource }),
+      context.db.prepare("insert into league_activity (league_activity_id,league_id,actor_user_id,activity_type,message,created_at_utc,metadata_json) values (?1,?2,?3,'draft.pick',?4,?5,?6)").bind(newId("lga"),context.leagueId,context.principal.userId,`${team.team_name} drafted ${player.display_name} at pick ${context.draft.current_overall_pick}.`,now,JSON.stringify({draftId:context.draft.draft_id,pickId,teamId:team.fantasy_team_id,playerId:player.nfl_player_id})),
     ]);
   } catch (error) {
     throw new ApiException(409, "draft_pick_conflict", "That pick or player was selected by another request. Reload the draft room.", { cause: error instanceof Error ? error.message : String(error) });
+  }
+  await enqueueLeagueNotification(env,context.leagueId,{notificationType:"draft-pick",title:`${team.team_name} selected ${player.display_name}`,body:`Pick ${context.draft.current_overall_pick} is complete.`,entityType:"draft-pick",entityId:pickId,actionUrl:`/?league=${context.leagueId}&tab=draft`},{excludeUserIds:[context.principal.userId]});
+  if (next.status === "active") {
+    const nextSlot=draftSlotForPick(context.draft.draft_type,next.overallPick,teams.length);const nextTeam=teams.find((candidate)=>candidate.slot_number===nextSlot);
+    if(nextTeam)await enqueueLeagueNotification(env,context.leagueId,{notificationType:"on-the-clock",title:"You are on the clock",body:`${nextTeam.team_name} has pick ${next.overallPick}.`,entityType:"draft",entityId:context.draft.draft_id,actionUrl:`/?league=${context.leagueId}&tab=draft`},{recipientUserIds:[nextTeam.manager_user_id]});
   }
 }
 
@@ -295,6 +304,7 @@ async function commissionerAction(context: DraftContext, env: Env, action: strin
     const teams = await loadTeams(context.db, context.draft.draft_id);
     if (!teams.length) throw new ApiException(409, "draft_teams_required", "Add a league team before starting the draft.");
     await setDraftState(context, "active", deadline(now, context.draft.pick_seconds), action, correlationId, now, { started_at_utc: now });
+    await enqueueLeagueNotification(env,context.leagueId,{notificationType:"draft-starting",title:"Draft started",body:"Your league draft is now live.",entityType:"draft",entityId:context.draft.draft_id,actionUrl:`/?league=${context.leagueId}&tab=draft`});
     return;
   }
   if (action === "pause") { await setDraftState(context, "paused", null, action, correlationId, now); return; }

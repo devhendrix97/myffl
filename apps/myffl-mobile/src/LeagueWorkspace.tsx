@@ -11,6 +11,9 @@ import type {
   LeagueDetail,
   LeagueFormat,
   LeagueInvitationResponse,
+  LeagueActivityView,
+  LeagueChatResponse,
+  LeagueMessageView,
   LeaguePlayerSearchItem,
   LeagueScheduleResponse,
   LeagueScoreboardResponse,
@@ -18,6 +21,8 @@ import type {
   LeaguePrivacy,
   LeagueScheduleInput,
   LeagueSummary,
+  NotificationCenterResponse,
+  NotificationPreferenceView,
   PlayerProfileResponse,
   PlayoffBracketResponse,
   RosterPositionLimitInput,
@@ -35,6 +40,7 @@ import type {
   TransactionsDashboardResponse,
   TransactionSettingsResponse,
   UpdateLeagueSettingsRequest,
+  WeeklyReportResponse,
 } from "@myffl/api-contracts";
 import {
   Archive,
@@ -45,12 +51,15 @@ import {
   ArrowUp,
   CalendarDays,
   Calculator,
+  BarChart3,
+  Bell,
   Check,
   ChevronRight,
   Clipboard,
   Copy,
   Gauge,
   History,
+  Image,
   Home,
   KeyRound,
   ListChecks,
@@ -59,6 +68,9 @@ import {
   Lock,
   LogOut,
   Menu,
+  MessageCircle,
+  Megaphone,
+  Pin,
   Plus,
   Play,
   Pause,
@@ -67,6 +79,7 @@ import {
   RotateCcw,
   Save,
   Search,
+  Send,
   Settings,
   ShieldCheck,
   SlidersHorizontal,
@@ -84,7 +97,7 @@ const apiBaseUrl =
   (isLocalHost ? "http://localhost:8787" : "https://api.myfflapp.com");
 
 type WorkspaceView = "home" | "create" | "join" | "league" | "game";
-type LeagueTab = "overview" | "members" | "team" | "gameday" | "players" | "transactions" | "draft" | "scoring" | "settings";
+type LeagueTab = "overview" | "members" | "team" | "gameday" | "players" | "transactions" | "draft" | "chat" | "scoring" | "settings";
 
 interface ApiEnvelope<T> {
   ok: boolean;
@@ -161,6 +174,10 @@ export function LeagueWorkspace({
   useEffect(() => {
     loadLeagues();
   }, [session.accessToken]);
+
+  useEffect(() => {
+    if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js");
+  }, []);
 
   async function loadLeagues() {
     setBusy(true);
@@ -258,6 +275,7 @@ export function LeagueWorkspace({
             <p className="eyebrow">{view === "league" && selectedLeague ? selectedLeague.leagueName : "League command center"}</p>
             <strong>{session.displayName}</strong>
           </div>
+          <NotificationCenterButton accessToken={session.accessToken} />
           <div className="user-avatar" aria-label={`Signed in as ${session.displayName}`}>
             {session.displayName.slice(0, 2).toUpperCase()}
           </div>
@@ -872,7 +890,7 @@ function LeagueDetailView({
         <span className={`league-state ${league.status}`}>{league.status}</span>
       </header>
       <div className="league-tabs" role="tablist">
-        {(["overview", "members", "team", "gameday", "players", "transactions", "draft", "scoring", "settings"] as LeagueTab[]).map((item) => (
+        {(["overview", "members", "team", "gameday", "players", "transactions", "draft", "chat", "scoring", "settings"] as LeagueTab[]).map((item) => (
           <button role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} type="button" key={item} onClick={() => setTab(item)}>{item}</button>
         ))}
       </div>
@@ -915,6 +933,7 @@ function LeagueDetailView({
       {tab === "players" && <PlayersView league={league} accessToken={accessToken} />}
       {tab === "transactions" && <TransactionsView league={league} accessToken={accessToken} canManage={canManage} />}
       {tab === "draft" && <DraftView league={league} accessToken={accessToken} />}
+      {tab === "chat" && <CommunityView league={league} accessToken={accessToken} canManage={canManage} />}
       {tab === "scoring" && <ScoringView league={league} accessToken={accessToken} canManage={canManage} />}
       {tab === "settings" && (
         <SettingsView
@@ -930,6 +949,144 @@ function LeagueDetailView({
       )}
     </div>
   );
+}
+
+function NotificationCenterButton({ accessToken }: { accessToken: string }) {
+  const [center, setCenter] = useState<NotificationCenterResponse | null>(null);
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState("");
+  const latestNotificationId = useRef<string | null>(null);
+
+  async function load() {
+    try {
+      const next=await leagueRequest<NotificationCenterResponse>("/api/notifications", accessToken);
+      const latest=next.notifications[0];
+      if(latestNotificationId.current&&latest&&!latest.readAtUtc&&latest.notificationId!==latestNotificationId.current&&"Notification" in window&&Notification.permission==="granted")new Notification(latest.title,{body:latest.body,tag:latest.notificationId});
+      latestNotificationId.current=latest?.notificationId??null;setCenter(next);setError("");
+    }
+    catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to load notifications."); }
+  }
+  useEffect(() => { void load(); const timer = window.setInterval(() => void load(), 60000); return () => window.clearInterval(timer); }, [accessToken]);
+  async function markRead(notificationId: string) {
+    await leagueRequest(`/api/notifications/${notificationId}/read`, accessToken, { method: "POST", body: {} });
+    setCenter((current) => current ? { ...current, unreadCount: Math.max(0, current.unreadCount - (current.notifications.find((item) => item.notificationId === notificationId)?.readAtUtc ? 0 : 1)), notifications: current.notifications.map((item) => item.notificationId === notificationId ? { ...item, readAtUtc: new Date().toISOString() } : item) } : current);
+  }
+  return <div className="notification-center">
+    <button className="icon-button" type="button" onClick={() => { setOpen((value) => !value); if (!center) void load(); }} aria-label="Notifications">
+      <Bell size={19}/>{Boolean(center?.unreadCount) && <span>{Math.min(99, center!.unreadCount)}</span>}
+    </button>
+    {open && <div className="notification-panel">
+      <header><div><p className="eyebrow">Updates</p><h2>Notifications</h2></div><button className="icon-button" onClick={() => setOpen(false)} aria-label="Close notifications"><X size={17}/></button></header>
+      {error && <p className="notification-error">{error}</p>}
+      <div>{center?.notifications.length ? center.notifications.map((item) => <button className={item.readAtUtc ? "notification-item read" : "notification-item"} key={item.notificationId} onClick={() => void markRead(item.notificationId)}>
+        <span><strong>{item.title}</strong><small>{item.body}</small></span><time>{formatDate(item.createdAtUtc)}</time>
+      </button>) : <p className="muted-empty">You are all caught up.</p>}</div>
+    </div>}
+  </div>;
+}
+
+function AuthenticatedImage({ src, alt, accessToken, className }: { src: string; alt: string; accessToken: string; className?: string }) {
+  const [resolvedSrc, setResolvedSrc] = useState(src);
+  useEffect(() => {
+    if (!src.startsWith(apiBaseUrl)) { setResolvedSrc(src); return; }
+    let objectUrl = "";
+    let active = true;
+    fetch(src, { headers: { authorization: `Bearer ${accessToken}` }, credentials: "include" })
+      .then((response) => { if (!response.ok) throw new Error("Image unavailable"); return response.blob(); })
+      .then((blob) => { if (active) { objectUrl = URL.createObjectURL(blob); setResolvedSrc(objectUrl); } })
+      .catch(() => { if (active) setResolvedSrc(""); });
+    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [src, accessToken]);
+  return resolvedSrc ? <img className={className} src={resolvedSrc} alt={alt} loading="lazy"/> : null;
+}
+
+function CommunityView({ league, accessToken, canManage }: { league: LeagueDetail; accessToken: string; canManage: boolean }) {
+  const [mode, setMode] = useState<"chat"|"activity"|"report"|"preferences">("chat");
+  const [channel, setChannel] = useState<"league"|"draft">("league");
+  const [chat, setChat] = useState<LeagueChatResponse | null>(null);
+  const [activity, setActivity] = useState<LeagueActivityView[]>([]);
+  const [report, setReport] = useState<WeeklyReportResponse | null>(null);
+  const [preferences, setPreferences] = useState<NotificationPreferenceView[]>([]);
+  const [week, setWeek] = useState(1);
+  const [text, setText] = useState("");
+  const [replyTo, setReplyTo] = useState<LeagueMessageView | null>(null);
+  const [messageType, setMessageType] = useState<"text"|"gif"|"poll"|"announcement">("text");
+  const [gifUrl, setGifUrl] = useState("");
+  const [pollQuestion, setPollQuestion] = useState("");
+  const [pollOptions, setPollOptions] = useState("");
+  const [attachment, setAttachment] = useState<{attachmentKey:string;attachmentUrl:string}|null>(null);
+  const [busy, setBusy] = useState(true);
+  const [error, setError] = useState("");
+  const fileInput = useRef<HTMLInputElement | null>(null);
+
+  async function loadChat(silent=false) {
+    if(!silent)setBusy(true);
+    try {
+      const next=await leagueRequest<LeagueChatResponse>(`/api/leagues/${league.leagueId}/chat?channel=${channel}`,accessToken);
+      setChat(next);setError("");
+      const latest=next.messages.at(-1);if(latest)void leagueRequest(`/api/leagues/${league.leagueId}/chat/read`,accessToken,{method:"POST",body:{channel,messageId:latest.messageId}});
+    } catch(requestError){setError(requestError instanceof Error?requestError.message:"Unable to load chat.");}
+    finally{if(!silent)setBusy(false);}
+  }
+  useEffect(()=>{if(mode==="chat")void loadChat();else if(mode==="activity"){setBusy(true);leagueRequest<CursorPage<LeagueActivityView>>(`/api/leagues/${league.leagueId}/activity`,accessToken).then(page=>{setActivity(page.items);setError("");}).catch(requestError=>setError(requestError instanceof Error?requestError.message:"Unable to load activity.")).finally(()=>setBusy(false));}else if(mode==="report"){setBusy(true);leagueRequest<WeeklyReportResponse>(`/api/leagues/${league.leagueId}/reports/${week}`,accessToken).then(value=>{setReport(value);setError("");}).catch(requestError=>{setReport(null);setError(requestError instanceof Error?requestError.message:"Unable to load the report.");}).finally(()=>setBusy(false));}else{leagueRequest<NotificationPreferenceView[]>(`/api/notifications/preferences?leagueId=${league.leagueId}`,accessToken).then(setPreferences).catch(requestError=>setError(requestError instanceof Error?requestError.message:"Unable to load preferences."));}},[accessToken,league.leagueId,mode,channel,week]);
+  useEffect(()=>{if(mode!=="chat")return;let socket:WebSocket|undefined;let stopped=false;let timer:number|undefined;async function connect(){try{const ticket=await leagueRequest<{ticket:string}>("/api/realtime/ticket",accessToken,{method:"POST",body:{leagueId:league.leagueId}});socket=new WebSocket(`${apiBaseUrl.replace(/^http/,"ws")}/api/realtime/leagues/${league.leagueId}`,["myffl-realtime",ticket.ticket]);socket.onmessage=(event)=>{try{const message=JSON.parse(String(event.data)) as {type?:string;event?:{eventType?:string}};if(message.type==="realtime.event"&&["LeagueMessageCreated","LeagueMessageUpdated","LeagueMessageDeleted","MessageReactionUpdated","PollVoteUpdated","AnnouncementPosted"].includes(message.event?.eventType??""))void loadChat(true);}catch{/* Ignore malformed realtime frames. */}};socket.onclose=()=>{if(!stopped)timer=window.setTimeout(()=>void connect(),2000);};}catch{if(!stopped)timer=window.setTimeout(()=>void connect(),3000);}}void connect();return()=>{stopped=true;if(timer)window.clearTimeout(timer);socket?.close();};},[accessToken,league.leagueId,mode,channel]);
+
+  async function upload(file: File) {
+    setBusy(true);setError("");
+    try {
+      const response=await fetch(`${apiBaseUrl}/api/leagues/${league.leagueId}/chat/assets`,{method:"POST",credentials:"include",headers:{authorization:`Bearer ${accessToken}`,"content-type":file.type},body:file});
+      const payload=await response.json() as ApiEnvelope<{attachmentKey:string;attachmentUrl:string}>;
+      if(!response.ok||!payload.ok||!payload.data)throw new Error(payload.error?.message??"Unable to upload the image.");
+      setAttachment(payload.data);setMessageType("text");
+    }catch(requestError){setError(requestError instanceof Error?requestError.message:"Unable to upload the image.");}
+    finally{setBusy(false);}
+  }
+  async function sendMessage() {
+    const options=pollOptions.split("\n").map(item=>item.trim()).filter(Boolean);
+    const mentionedUserIds=league.members.filter(member=>text.toLowerCase().includes(`@${member.displayName.toLowerCase()}`)).map(member=>member.userId);
+    const body={channel,messageType:attachment?"image":messageType,body:text,attachmentKey:attachment?.attachmentKey,attachmentUrl:attachment?.attachmentUrl??(messageType==="gif"?gifUrl:undefined),replyToMessageId:replyTo?.messageId,mentionedUserIds,poll:messageType==="poll"?{question:pollQuestion,options}:undefined};
+    setBusy(true);try{await leagueRequest(`/api/leagues/${league.leagueId}/chat`,accessToken,{method:"POST",body});setText("");setReplyTo(null);setAttachment(null);setGifUrl("");setPollQuestion("");setPollOptions("");setMessageType("text");await loadChat(true);}catch(requestError){setError(requestError instanceof Error?requestError.message:"Unable to send the message.");}finally{setBusy(false);}
+  }
+  async function messageCommand(message: LeagueMessageView, action:"pin"|"delete") {
+    try{if(action==="delete")await leagueRequest(`/api/leagues/${league.leagueId}/chat/${message.messageId}`,accessToken,{method:"DELETE"});else await leagueRequest(`/api/leagues/${league.leagueId}/chat/${message.messageId}`,accessToken,{method:"PATCH",body:{revisionNumber:message.revisionNumber,pinned:!message.pinned}});await loadChat(true);}catch(requestError){setError(requestError instanceof Error?requestError.message:"Unable to update the message.");}
+  }
+  async function react(message:LeagueMessageView,reaction:string){const active=message.reactions.find(item=>item.reaction===reaction)?.reactedByMe;await leagueRequest(`/api/leagues/${league.leagueId}/chat/${message.messageId}/reactions`,accessToken,{method:active?"DELETE":"POST",body:{reaction}});await loadChat(true);}
+  async function vote(messageId:string,optionId:string){await leagueRequest(`/api/leagues/${league.leagueId}/chat/${messageId}/votes`,accessToken,{method:"POST",body:{optionIds:[optionId]}});await loadChat(true);}
+  async function savePreferences() {
+    try {
+      if(preferences.some(item=>item.browserPushEnabled))await subscribeBrowserPush(accessToken);
+      else if(preferences.some(item=>item.desktopEnabled)&&"Notification" in window&&Notification.permission==="default")await Notification.requestPermission();
+      await leagueRequest("/api/notifications/preferences",accessToken,{method:"PUT",body:{preferences}});
+      setError("");
+    } catch(requestError){setError(requestError instanceof Error?requestError.message:"Unable to save notification preferences.");}
+  }
+
+  return <div className="community-room">
+    {error&&<InlineAlert message={error} onClose={()=>setError("")}/>}
+    <header className="community-heading"><div><p className="eyebrow">League communication</p><h2>Community</h2></div><div className="community-modes">{(["chat","activity","report","preferences"] as const).map(item=><button className={mode===item?"active":""} onClick={()=>setMode(item)} key={item}>{item}</button>)}</div></header>
+    {busy&&!chat?<div className="workspace-loading"><LoaderCircle className="spin" size={24}/><span>Loading community</span></div>:mode==="chat"?<div className="chat-layout">
+      <section className="chat-main">
+        <div className="chat-channel"><button className={channel==="league"?"active":""} onClick={()=>setChannel("league")}><MessageCircle size={15}/> League chat</button><button className={channel==="draft"?"active":""} onClick={()=>setChannel("draft")}><Clipboard size={15}/> Draft chat</button><span>{chat?.unreadCount??0} unread</span></div>
+        {Boolean(chat?.pinnedMessages.length)&&<div className="pinned-strip"><Pin size={14}/>{chat!.pinnedMessages.map(message=><button key={message.messageId} title={message.body}>{message.authorDisplayName}: {message.body||message.poll?.question}</button>)}</div>}
+        <div className="message-list">{chat?.messages.length?chat.messages.map(message=><article className={message.messageType==="announcement"?"league-message announcement":"league-message"} key={message.messageId}>
+          <header><span className="message-avatar">{message.authorDisplayName.slice(0,2).toUpperCase()}</span><span><strong>{message.authorDisplayName}</strong><small>{formatDate(message.createdAtUtc)}{message.edited?" - edited":""}</small></span>{message.pinned&&<Pin size={13}/>}</header>
+          {message.replyTo&&<blockquote><b>{message.replyTo.authorDisplayName}</b>{message.replyTo.body}</blockquote>}
+          {message.messageType==="announcement"&&<p className="announcement-label"><Megaphone size={14}/> Commissioner announcement</p>}
+          <p className="message-body">{message.body}</p>
+          {message.attachmentUrl&&<AuthenticatedImage src={message.attachmentUrl} alt="Message attachment" accessToken={accessToken}/>}
+          {message.poll&&<div className="message-poll"><strong>{message.poll.question}</strong>{message.poll.options.map(option=><button className={option.votedByMe?"voted":""} onClick={()=>void vote(message.messageId,option.pollOptionId)} key={option.pollOptionId}><span>{option.displayText}</span><b>{option.voteCount}</b></button>)}<small>{message.poll.totalVotes} votes</small></div>}
+          {!message.deleted&&<footer><button onClick={()=>setReplyTo(message)}>Reply</button>{["Like","Celebrate","Wow"].map(reaction=><button className={message.reactions.find(item=>item.reaction===reaction)?.reactedByMe?"active":""} onClick={()=>void react(message,reaction)} key={reaction}>{reaction} {message.reactions.find(item=>item.reaction===reaction)?.count||""}</button>)}{message.canModerate&&<button onClick={()=>void messageCommand(message,"pin")}>{message.pinned?"Unpin":"Pin"}</button>}{message.canEdit&&<button onClick={()=>void messageCommand(message,"delete")}>Remove</button>}{message.readByCount>0&&<span>Seen by {message.readByCount}</span>}</footer>}
+        </article>):<p className="muted-empty">Start the league conversation.</p>}</div>
+        <div className="message-composer">{replyTo&&<div className="reply-preview"><span>Replying to <b>{replyTo.authorDisplayName}</b></span><button className="icon-button" onClick={()=>setReplyTo(null)} aria-label="Cancel reply"><X size={14}/></button></div>}
+          <div className="composer-tools"><button className={messageType==="text"&&!attachment?"active":""} onClick={()=>setMessageType("text")}>Message</button><button onClick={()=>fileInput.current?.click()}><Image size={14}/> Image</button><button className={messageType==="gif"?"active":""} onClick={()=>setMessageType("gif")}>GIF</button><button className={messageType==="poll"?"active":""} onClick={()=>setMessageType("poll")}>Poll</button>{canManage&&<button className={messageType==="announcement"?"active":""} onClick={()=>setMessageType("announcement")}><Megaphone size={14}/> Announcement</button>}<input ref={fileInput} hidden type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={event=>{const file=event.target.files?.[0];if(file)void upload(file);}}/></div>
+          {attachment&&<div className="attachment-preview"><AuthenticatedImage src={attachment.attachmentUrl} alt="Pending attachment" accessToken={accessToken}/><button className="icon-button" onClick={()=>setAttachment(null)} aria-label="Remove attachment"><X size={14}/></button></div>}
+          {messageType==="gif"&&<input value={gifUrl} onChange={event=>setGifUrl(event.target.value)} placeholder="Secure Giphy image URL"/>}
+          {messageType==="poll"&&<div className="poll-composer"><input value={pollQuestion} onChange={event=>setPollQuestion(event.target.value)} placeholder="Poll question"/><textarea value={pollOptions} onChange={event=>setPollOptions(event.target.value)} placeholder={"One option per line\nSecond option"}/></div>}
+          <div className="composer-input"><textarea value={text} maxLength={2000} onChange={event=>setText(event.target.value)} placeholder={messageType==="announcement"?"Write an announcement":`Message ${channel} chat`}/><button className="primary-button compact" disabled={busy||(!text.trim()&&!attachment&&messageType!=="poll")} onClick={()=>void sendMessage()}><Send size={16}/> Send</button></div>
+        </div>
+      </section>
+    </div>:mode==="activity"?<section className="community-activity">{activity.length?activity.map(item=><div key={item.activityId}><Activity size={15}/><span><strong>{item.message}</strong><small>{item.actorDisplayName??"myFFL system"} - {formatDate(item.createdAtUtc)}</small></span></div>):<p className="muted-empty">League activity will appear here.</p>}</section>:mode==="report"?<section className="weekly-report"><header><div><p className="eyebrow">League recap</p><h2>Weekly report</h2></div><label>Week<select value={week} onChange={event=>setWeek(Number(event.target.value))}>{Array.from({length:18},(_,index)=><option value={index+1} key={index+1}>Week {index+1}</option>)}</select></label></header>{report?<><div className="report-metrics">{report.metrics.map(metric=><div key={metric.label}><BarChart3 size={17}/><span><small>{metric.label}</small><strong>{metric.value}</strong><em>{metric.detail}</em></span></div>)}</div><div className="power-rankings"><h3>Power rankings</h3>{report.powerRankings.map(team=><p key={team.teamId}><b>{team.rank}</b><span>{team.teamName}</span><strong>{team.score.toFixed(1)}</strong></p>)}</div></>:<p className="muted-empty">This report appears when every matchup for the selected week is final.</p>}</section>:<section className="notification-preferences"><div className="section-heading"><div><p className="eyebrow">Delivery channels</p><h2>Notification preferences</h2></div></div>{preferences.map((preference,index)=><div className="preference-row" key={`${preference.leagueId}-${preference.notificationType}`}><span><strong>{preference.notificationType==="*"?"All league updates":preference.notificationType}</strong><small>Override delivery for this league.</small></span>{(["inAppEnabled","desktopEnabled","browserPushEnabled","emailEnabled"] as const).map(key=><label key={key}><input type="checkbox" checked={preference[key]} onChange={event=>setPreferences(current=>current.map((item,itemIndex)=>itemIndex===index?{...item,[key]:event.target.checked}:item))}/>{key.replace("Enabled","").replace("inApp","In-app").replace("browserPush","Browser push")}</label>)}</div>)}<button className="primary-button compact" onClick={()=>void savePreferences()}><Save size={15}/> Save preferences</button></section>}
+  </div>;
 }
 
 function GamedayView({ league, accessToken, canManage }: { league: LeagueDetail; accessToken: string; canManage: boolean }) {
@@ -1863,6 +2020,25 @@ function monogram(name: string): string {
 
 function formatRole(role: string): string {
   return role.split("-").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+}
+
+async function subscribeBrowserPush(accessToken: string): Promise<void> {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) throw new Error("Browser push is not supported on this device.");
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") throw new Error("Allow notifications in your browser to enable browser push.");
+  const registration = await navigator.serviceWorker.ready;
+  const { publicKey } = await leagueRequest<{ publicKey: string }>("/api/notifications/push-key", accessToken);
+  const existing = await registration.pushManager.getSubscription();
+  const subscription = existing ?? await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: base64UrlBytes(publicKey) });
+  const value = subscription.toJSON();
+  if (!value.endpoint || !value.keys?.p256dh || !value.keys.auth) throw new Error("The browser returned an incomplete push subscription.");
+  await leagueRequest("/api/notifications/push-subscriptions", accessToken, { method: "POST", body: { endpoint: value.endpoint, keys: value.keys } });
+}
+
+function base64UrlBytes(value: string): Uint8Array<ArrayBuffer> {
+  const padded = value + "=".repeat((4 - (value.length % 4)) % 4);
+  const binary = atob(padded.replaceAll("-", "+").replaceAll("_", "/"));
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
 function formatLabel(format: LeagueFormat | "championship" | "consolation"): string {

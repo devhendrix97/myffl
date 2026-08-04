@@ -19,6 +19,7 @@ import { authenticate, type HandlerResult } from "./auth";
 import { ApiException, readJson } from "./http";
 import { getLeagueRow, requireLeagueRole } from "./league";
 import { newId, type AccessTokenPrincipal } from "./security";
+import { enqueueLeagueNotification } from "./notifications";
 
 const commissionerRoles = ["commissioner", "co-commissioner"] as const;
 const allLeagueRoles = ["commissioner", "co-commissioner", "manager"] as const;
@@ -569,7 +570,7 @@ async function applyDraft(
     ).bind(newId("lac"), context.leagueId, principal.userId, `Scoring version ${draft.version_number} was applied.`, now, JSON.stringify({ reason })),
   ]);
 
-  ctx.waitUntil(env.SCORING_QUEUE.send({
+  ctx.waitUntil(Promise.all([env.SCORING_QUEUE.send({
     type: "scoring.configuration.applied",
     leagueId: context.leagueId,
     seasonId: context.seasonId,
@@ -578,7 +579,7 @@ async function applyDraft(
     affectedWeeks: preview.affectedWeeks,
     recalculationRequired: preview.recalculationRequired,
     requestedAtUtc: now,
-  }));
+  }), enqueueLeagueNotification(env,context.leagueId,{notificationType:preview.recalculationRequired?"retroactive-recalculation":"scoring-changed",title:"League scoring changed",body:`Scoring version ${draft.version_number} was applied: ${reason}`,entityType:"scoring-version",entityId:draft.scoring_version_id,actionUrl:`/?league=${context.leagueId}&tab=scoring`},{excludeUserIds:[principal.userId]})]).then(()=>undefined));
   return getConfigurationById(context, draft.scoring_version_id);
 }
 

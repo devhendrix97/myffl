@@ -4,6 +4,7 @@ import { issueAccessToken, verifyAccessToken } from "./security";
 import { authenticate, type HandlerResult } from "./auth";
 import { ApiException } from "./http";
 import { requireLeagueRole } from "./league";
+import { enqueueLeagueNotification } from "./notifications";
 
 export interface RealtimeEventInput {
   eventType: string;
@@ -102,7 +103,12 @@ export async function handleRealtimeRequest(request: Request, url: URL, env: Env
 
 export async function publishRealtimeEvent(env: Env, kind: "league" | "matchup" | "event", key: string, event: RealtimeEventInput): Promise<number> {
   const namespace = kind === "league" ? env.LEAGUE_REALTIME : kind === "matchup" ? env.MATCHUP_REALTIME : env.LIVE_NFL_EVENT;
-  return namespace.getByName(key).publish(event);
+  const revision = await namespace.getByName(key).publish(event);
+  if (kind === "league" && event.eventType === "MatchupScoreUpdated" && event.payload.status === "final") {
+    try { await enqueueLeagueNotification(env,key,{notificationType:"weekly-result",title:"Matchup final",body:"Your league's matchup results are final.",entityType:"matchup",entityId:event.entityId,actionUrl:`/?league=${key}&tab=gameday`}); }
+    catch (error) { console.error(JSON.stringify({level:"error",event:"notification_enqueue_failed",leagueId:key,error:error instanceof Error?error.message:String(error)})); }
+  }
+  return revision;
 }
 
 function principalWithoutExpiry(principal: AccessTokenPrincipal): Omit<AccessTokenPrincipal,"expiresAtUtc"> { return { userId: principal.userId, sessionId: principal.sessionId, displayName: principal.displayName, email: principal.email, emailVerified: principal.emailVerified }; }

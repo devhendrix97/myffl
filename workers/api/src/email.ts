@@ -64,6 +64,24 @@ export async function sendPasswordResetEmail(
   });
 }
 
+export async function sendNotificationEmail(
+  env: Env,
+  input: { to: string; displayName: string; title: string; body: string; actionUrl?: string },
+): Promise<void> {
+  const safeName = escapeHtml(input.displayName);
+  const safeBody = escapeHtml(input.body);
+  const action = input.actionUrl
+    ? `<p class="action"><a href="${escapeHtml(new URL(input.actionUrl, `${env.APPLICATION_BASE_URL}/`).toString())}">Open myFFL</a></p>`
+    : "";
+  await env.EMAIL.send({
+    to: input.to,
+    from: { email: env.EMAIL_FROM_ADDRESS, name: env.EMAIL_FROM_NAME },
+    subject: input.title,
+    text: [`Hi ${input.displayName},`, "", input.body, input.actionUrl ? new URL(input.actionUrl, `${env.APPLICATION_BASE_URL}/`).toString() : ""].filter(Boolean).join("\n"),
+    html: emailShell(input.title, `<p>Hi ${safeName},</p><p>${safeBody}</p>${action}`),
+  });
+}
+
 function buildAppLink(baseUrl: string, path: string, token: string): string {
   const url = new URL(path, `${baseUrl}/`);
   url.searchParams.set("token", token);

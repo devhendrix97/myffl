@@ -215,6 +215,83 @@ export interface LeagueDetail extends LeagueSummary {
   recentActivity: Array<{ activityId: string; message: string; createdAtUtc: string }>;
 }
 
+export type LeagueMessageType = "text" | "image" | "gif" | "poll" | "announcement";
+export interface LeagueMessageReaction { reaction: string; count: number; reactedByMe: boolean; }
+export interface LeaguePollOption { pollOptionId: string; displayText: string; voteCount: number; votedByMe: boolean; }
+export interface LeaguePoll { pollId: string; question: string; allowsMultiple: boolean; closesAtUtc?: string; totalVotes: number; options: LeaguePollOption[]; }
+export interface LeagueMessageView {
+  messageId: string;
+  channel: "league" | "draft";
+  messageType: LeagueMessageType;
+  authorUserId: string;
+  authorDisplayName: string;
+  body: string;
+  attachmentUrl?: string;
+  replyTo?: { messageId: string; authorDisplayName: string; body: string };
+  reactions: LeagueMessageReaction[];
+  poll?: LeaguePoll;
+  pinned: boolean;
+  edited: boolean;
+  deleted: boolean;
+  readByCount: number;
+  createdAtUtc: string;
+  revisionNumber: number;
+  canEdit: boolean;
+  canModerate: boolean;
+}
+export interface LeagueChatResponse {
+  messages: LeagueMessageView[];
+  nextCursor?: string;
+  unreadCount: number;
+  pinnedMessages: LeagueMessageView[];
+}
+export interface CreateLeagueMessageRequest {
+  channel: "league" | "draft";
+  messageType: LeagueMessageType;
+  body?: string;
+  attachmentUrl?: string;
+  attachmentKey?: string;
+  replyToMessageId?: string;
+  mentionedUserIds?: string[];
+  poll?: { question: string; options: string[]; allowsMultiple?: boolean; closesAtUtc?: string };
+}
+export interface LeagueActivityView {
+  activityId: string;
+  activityType: string;
+  message: string;
+  actorUserId?: string;
+  actorDisplayName?: string;
+  metadata: Record<string, unknown>;
+  createdAtUtc: string;
+}
+export interface WeeklyReportMetric { label: string; value: string; detail?: string; teamId?: string; playerId?: string; }
+export interface WeeklyReportResponse {
+  reportId: string;
+  weekNumber: number;
+  generatedAtUtc: string;
+  metrics: WeeklyReportMetric[];
+  powerRankings: Array<{ rank: number; teamId: string; teamName: string; score: number }>;
+}
+export interface NotificationView {
+  notificationId: string;
+  leagueId?: string;
+  notificationType: string;
+  title: string;
+  body: string;
+  actionUrl?: string;
+  createdAtUtc: string;
+  readAtUtc?: string;
+}
+export interface NotificationCenterResponse { notifications: NotificationView[]; unreadCount: number; nextCursor?: string; }
+export interface NotificationPreferenceView {
+  leagueId: string;
+  notificationType: string;
+  inAppEnabled: boolean;
+  emailEnabled: boolean;
+  desktopEnabled: boolean;
+  browserPushEnabled: boolean;
+}
+
 export interface CreateLeagueResponse {
   league: LeagueDetail;
   invitationCode: string;

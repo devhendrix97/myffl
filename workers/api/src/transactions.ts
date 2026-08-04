@@ -12,6 +12,7 @@ import { getProviderRuntime } from "./game-feed";
 import { ApiException, readJson } from "./http";
 import { getLeagueRow, requireLeagueRole } from "./league";
 import { newId, type AccessTokenPrincipal } from "./security";
+import { enqueueLeagueNotification } from "./notifications";
 
 export type WaiverJob = { type: "process-waiver-period"; leagueId: string; seasonId: string; waiverPeriodId: string };
 
@@ -187,6 +188,7 @@ async function processWaiverPeriod(env: Env, leagueId: string, seasonId: string,
       } catch (error) {
         const reason = error instanceof ApiException ? error.message : "The waiver claim could not be processed.";
         await db.prepare("update waiver_claims set status='failed', failure_reason=?1, processed_at_utc=?2, revision_number=revision_number+1 where waiver_claim_id=?3 and status='pending'").bind(reason, new Date().toISOString(), claim.waiver_claim_id).run();
+        await notifySafely(env,leagueId,{notificationType:"waiver-failed",title:"Waiver claim failed",body:reason,entityType:"waiver-claim",entityId:claim.waiver_claim_id,actionUrl:`/?league=${leagueId}&tab=transactions`},{recipientUserIds:[claim.user_id]});
       }
     }
   }
@@ -239,6 +241,7 @@ async function executePlayerMove(db: D1Database, env: Env, leagueId: string, sea
     statements.push(db.prepare("update team_transaction_balances set faab_remaining_milli=faab_remaining_milli-?1, waiver_priority=?2, revision_number=revision_number+1, updated_at_utc=?3 where league_season_id=?4 and fantasy_team_id=?5 and faab_remaining_milli>=?1").bind(waiver.bidMilli, maximum?.maximum ?? 1, now, seasonId, teamId));
   }
   try { await db.batch(statements); } catch { throw new ApiException(409, "player_unavailable", "The player is no longer available or the roster changed while processing."); }
+  await notifySafely(env,leagueId,{notificationType:source==="waiver"?"waiver-succeeded":"add-drop",title:source==="waiver"?"Waiver claim succeeded":"Roster move completed",body:`${player.display_name} was added${drop?` and ${drop.display_name} was dropped`:""}.`,entityType:"transaction",entityId:transactionId,actionUrl:`/?league=${leagueId}&tab=transactions`},{recipientUserIds:[actorUserId]});
   return transactionId;
 }
 
@@ -265,7 +268,10 @@ async function proposeTrade(principal: AccessTokenPrincipal, db: D1Database, lea
   for (const teamId of participantIds) statements.push(db.prepare("insert into trade_teams (trade_team_id, trade_id, fantasy_team_id, response_status, responded_by_user_id, responded_at_utc) values (?1,?2,?3,?4,?5,?6)").bind(newId("trt"), tradeId, teamId, teamId === proposer.fantasy_team_id ? "accepted" : "pending", teamId === proposer.fantasy_team_id ? principal.userId : null, teamId === proposer.fantasy_team_id ? now : null));
   for (const asset of body.assets) statements.push(db.prepare("insert into trade_assets (trade_asset_id, trade_id, from_fantasy_team_id, to_fantasy_team_id, asset_type, asset_id, amount_milli, metadata_json) values (?1,?2,?3,?4,?5,?6,?7,?8)").bind(newId("tra"), tradeId, asset.fromFantasyTeamId, asset.toFantasyTeamId, asset.assetType, asset.assetId ?? null, asset.amount === undefined ? null : Math.round(asset.amount * 1000), JSON.stringify({ draftSeasonYear: asset.draftSeasonYear, roundNumber: asset.roundNumber, originalFantasyTeamId: asset.originalFantasyTeamId })));
   statements.push(db.prepare("insert into league_audit_events (league_audit_event_id, league_id, actor_user_id, action, entity_type, entity_id, correlation_id, created_at_utc, metadata_json) values (?1,?2,?3,'trade.proposed','trade',?4,?5,?6,?7)").bind(newId("lae"), leagueId, principal.userId, tradeId, correlationId, now, JSON.stringify({ recipients, assetCount: body.assets.length })));
-  await db.batch(statements); return requireTradeView(principal, db, leagueId, seasonId, tradeId, env);
+  await db.batch(statements);
+  const recipientUsers=await db.prepare(`select manager_user_id from fantasy_teams where league_season_id=?1 and fantasy_team_id in (${recipients.map((_,index)=>`?${index+2}`).join(",")})`).bind(seasonId,...recipients).all<{manager_user_id:string}>();
+  await notifySafely(env,leagueId,{notificationType:"trade-received",title:"New trade offer",body:"A team sent you a trade proposal.",entityType:"trade",entityId:tradeId,actionUrl:`/?league=${leagueId}&tab=transactions`},{recipientUserIds:(recipientUsers.results??[]).map(row=>row.manager_user_id)});
+  return requireTradeView(principal, db, leagueId, seasonId, tradeId, env);
 }
 
 async function tradeAction(principal: AccessTokenPrincipal, db: D1Database, leagueId: string, seasonId: string, tradeId: string, action: string, request: Request, env: Env, correlationId: string): Promise<TradeView> {
@@ -305,7 +311,11 @@ async function tradeAction(principal: AccessTokenPrincipal, db: D1Database, leag
     if (action === "veto") await db.prepare("update trades set status='vetoed', revision_number=revision_number+1, updated_at_utc=?1 where trade_id=?2 and status='under-review'").bind(now, tradeId).run();
     else { await db.prepare("update trades set status='approved', revision_number=revision_number+1, updated_at_utc=?1 where trade_id=?2 and status='under-review'").bind(now, tradeId).run(); await settleTrade(db, env, leagueId, seasonId, tradeId, principal.userId, correlationId); }
   } else throw new ApiException(404, "trade_action_not_found", "Trade action not found.");
-  return requireTradeView(principal, db, leagueId, seasonId, tradeId, env);
+  const view=await requireTradeView(principal, db, leagueId, seasonId, tradeId, env);
+  const participantUsers=await db.prepare("select teams.manager_user_id from trade_teams joined join fantasy_teams teams on teams.fantasy_team_id=joined.fantasy_team_id where joined.trade_id=?1").bind(tradeId).all<{manager_user_id:string}>();
+  const notificationType=view.status==="rejected"?"trade-rejected":view.status==="processed"?"trade-accepted":"trade-updated";
+  await notifySafely(env,leagueId,{notificationType,title:view.status==="processed"?"Trade completed":`Trade ${view.status}`,body:"A trade involving your team was updated.",entityType:"trade",entityId:tradeId,actionUrl:`/?league=${leagueId}&tab=transactions`},{recipientUserIds:(participantUsers.results??[]).map(row=>row.manager_user_id),excludeUserIds:[principal.userId]});
+  return view;
 }
 
 async function processTrade(db: D1Database, env: Env, leagueId: string, seasonId: string, tradeId: string, actorUserId: string, correlationId: string): Promise<void> {
@@ -321,7 +331,7 @@ async function processTrade(db: D1Database, env: Env, leagueId: string, seasonId
     statements.push(db.prepare("insert into transaction_assets (transaction_asset_id, transaction_id, fantasy_team_id, asset_type, asset_id, direction, amount_milli, metadata_json) values (?1,?2,?3,?4,?5,'released',?6,?7)").bind(newId("txa"), transactionId, asset.from_fantasy_team_id, asset.asset_type, asset.asset_id, asset.amount_milli, asset.metadata_json));
     statements.push(db.prepare("insert into transaction_assets (transaction_asset_id, transaction_id, fantasy_team_id, asset_type, asset_id, direction, amount_milli, metadata_json) values (?1,?2,?3,?4,?5,'acquired',?6,?7)").bind(newId("txa"), transactionId, asset.to_fantasy_team_id, asset.asset_type, asset.asset_id, asset.amount_milli, asset.metadata_json));
   }
-  statements.push(db.prepare("update trades set status='processed', processed_at_utc=?1, updated_at_utc=?1, revision_number=revision_number+1 where trade_id=?2 and status='approved'").bind(now, tradeId)); statements.push(db.prepare("insert into league_audit_events (league_audit_event_id, league_id, actor_user_id, action, entity_type, entity_id, correlation_id, created_at_utc, metadata_json) values (?1,?2,?3,'trade.processed','trade',?4,?5,?6,?7)").bind(newId("lae"), leagueId, actorUserId, tradeId, correlationId, now, JSON.stringify({ transactionId })));
+  statements.push(db.prepare("update trades set status='processed', processed_at_utc=?1, updated_at_utc=?1, revision_number=revision_number+1 where trade_id=?2 and status='approved'").bind(now, tradeId)); statements.push(db.prepare("insert into league_audit_events (league_audit_event_id, league_id, actor_user_id, action, entity_type, entity_id, correlation_id, created_at_utc, metadata_json) values (?1,?2,?3,'trade.processed','trade',?4,?5,?6,?7)").bind(newId("lae"), leagueId, actorUserId, tradeId, correlationId, now, JSON.stringify({ transactionId }))); statements.push(db.prepare("insert into league_activity (league_activity_id,league_id,actor_user_id,activity_type,message,created_at_utc,metadata_json) values (?1,?2,?3,'trade.processed','A trade was completed.',?4,?5)").bind(newId("lga"),leagueId,actorUserId,now,JSON.stringify({tradeId,transactionId})));
   try { await db.batch(statements); } catch { await db.prepare("update trades set status='failed', failure_reason='Asset ownership or roster state changed before processing.', updated_at_utc=?1, revision_number=revision_number+1 where trade_id=?2").bind(now, tradeId).run(); throw new ApiException(409, "trade_processing_failed", "Trade assets changed before processing."); }
 }
 
@@ -329,6 +339,8 @@ async function settleTrade(db: D1Database, env: Env, leagueId: string, seasonId:
   try { await processTrade(db, env, leagueId, seasonId, tradeId, actorUserId, correlationId); }
   catch (error) { await db.prepare("update trades set status='failed', failure_reason=?1, updated_at_utc=?2, revision_number=revision_number+1 where trade_id=?3 and status!='processed'").bind(error instanceof Error ? error.message : "Trade processing failed.", new Date().toISOString(), tradeId).run(); throw error; }
 }
+
+async function notifySafely(env:Env,leagueId:string,job:Parameters<typeof enqueueLeagueNotification>[2],options?:Parameters<typeof enqueueLeagueNotification>[3]):Promise<void>{try{await enqueueLeagueNotification(env,leagueId,job,options);}catch(error){console.error(JSON.stringify({level:"error",event:"notification_enqueue_failed",leagueId,error:error instanceof Error?error.message:String(error)}));}}
 
 async function loadTrades(principal: AccessTokenPrincipal, db: D1Database, leagueId: string, seasonId: string, _env: Env): Promise<TradeView[]> {
   const result = await db.prepare("select trade_id from trades where league_season_id=?1 order by updated_at_utc desc limit 50").bind(seasonId).all<{ trade_id: string }>();
