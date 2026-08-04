@@ -135,7 +135,7 @@ async function routeRequest(
         service: "myffl-api",
         environment: env.ENVIRONMENT,
         status: "healthy",
-        version: "0.11.0",
+        version: "0.12.0",
         utc: new Date().toISOString(),
       } satisfies HealthResponse,
     };
@@ -208,8 +208,8 @@ async function routeRequest(
 
 function phaseStatus(): PhaseStatusResponse {
   return {
-    phase: "phase-10",
-    title: "Communication and Notifications",
+    phase: "phase-11",
+    title: "Administration",
     items: [
       {
         key: "cloudflare-resources",
@@ -330,6 +330,12 @@ function phaseStatus(): PhaseStatusResponse {
         label: "Notification delivery",
         status: "available",
         summary: "Per-league preferences control in-app, desktop, browser push, and email notification delivery.",
+      },
+      {
+        key: "platform-administration",
+        label: "Platform administration",
+        status: "available",
+        summary: "Role-gated user, league, player, event, scoring investigation, correction, audit, replay, and monitoring tools are available.",
       },
     ],
   };

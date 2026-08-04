@@ -246,6 +246,14 @@ export async function login(
     env.CORE_DB.prepare(
       "update users set last_login_at_utc = ?1, updated_at_utc = ?1 where user_id = ?2",
     ).bind(nowIso, user.user_id),
+    env.CORE_DB.prepare(
+      `insert into user_login_events
+        (user_login_event_id,user_id,client_type,ip_address,user_agent,succeeded,created_at_utc)
+       values (?1,?2,?3,?4,?5,1,?6)`,
+    ).bind(
+      newId("ule"), user.user_id, body.clientType ?? "browser",
+      request.headers.get("cf-connecting-ip"), request.headers.get("user-agent"), nowIso,
+    ),
     auditStatement(env.CORE_DB, user.user_id, "auth.login", user.user_id, correlationId, nowIso),
   ]);
   queueAudit(ctx, env, user.user_id, "auth.login", correlationId);

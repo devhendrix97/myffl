@@ -4,6 +4,8 @@ import { ApiException, readJson } from "./http";
 import { ingestReplayFrame, runProviderJob, type ProviderJob } from "./provider";
 import { fullGameReplayFrames, replayScenarioId, replayScenarioName } from "./replay-scenario";
 import { getProviderRuntime } from "./game-feed";
+import { handlePlatformAdminRequest } from "./admin-platform";
+import { handleAdminInvestigationRequest } from "./admin-investigation";
 
 interface AdminPrincipal { userId: string; role: string }
 interface SimulationRow {
@@ -23,9 +25,14 @@ export async function handleAdminRequest(
   env: Env,
   ctx: ExecutionContext,
   correlationId: string,
-): Promise<HandlerResult<unknown> | undefined> {
+): Promise<HandlerResult<unknown> | Response | undefined> {
   if (!url.pathname.startsWith("/api/admin/")) return undefined;
   const admin = await requirePlatformAdmin(request, env);
+
+  const platformResult = await handlePlatformAdminRequest(request, url, env, admin, correlationId);
+  if (platformResult) return platformResult;
+  const investigationResult = await handleAdminInvestigationRequest(request, url, env, ctx, admin, correlationId);
+  if (investigationResult) return investigationResult;
 
   if (request.method === "GET" && url.pathname === "/api/admin/provider/dashboard") {
     return { data: await providerDashboard(env) };
