@@ -58,6 +58,9 @@ export async function handleFantasyProsRequest(
   if (url.pathname === "/api/internal/fantasypros/csv" && request.method === "POST") {
     return importFantasyProsCsvFromInternalRequest(request, env);
   }
+  if (url.pathname === "/api/internal/fantasypros/csv-sync" && request.method === "POST") {
+    return syncFantasyProsCsvFromInternalRequest(request, env);
+  }
   const match = url.pathname.match(/^\/api\/leagues\/([^/]+)\/rankings$/);
   if (!match || request.method !== "GET") return undefined;
   const principal = await authenticate(request, env);
@@ -350,6 +353,51 @@ export async function importFantasyProsCsv(
   return { imported, mapped: mapped.filter((item) => item.nflPlayerId).length, scope, scoring: options.scoring, seasonYear: options.seasonYear };
 }
 
+export async function syncFantasyProsCsvExportNow(
+  env: Env,
+  options: { seasonYear?: number; scoring?: RankingScoring; scope?: string; sourceUpdatedAt?: string } = {},
+): Promise<{ imported: number; mapped: number; scope: string; scoring: RankingScoring; seasonYear: number; sourceUrl: string }> {
+  const seasonYear = options.seasonYear ?? new Date().getUTCFullYear();
+  const scoring = options.scoring ?? "PPR";
+  const scope = (options.scope || "OVERALL").toUpperCase();
+  const sourceUrl = fantasyProsExportUrl(scoring, scope);
+  const response = await fetch(sourceUrl, {
+    headers: {
+      accept: "application/vnd.ms-excel,text/html,application/xhtml+xml",
+      "user-agent": "Mozilla/5.0 myFFL rankings sync",
+    },
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!response.ok) throw new ApiException(502, "fantasypros_export_failed", `FantasyPros export returned ${response.status}.`);
+  const html = await response.text();
+  const csv = fantasyProsExportHtmlToCsv(html);
+  if (!csv) throw new ApiException(502, "fantasypros_export_empty", "FantasyPros export did not include a rankings table.");
+  const result = await importFantasyProsCsv(env, csv, {
+    seasonYear,
+    scoring,
+    scope,
+    sourceUpdatedAt: options.sourceUpdatedAt ?? new Date().toISOString(),
+  });
+  return { ...result, sourceUrl };
+}
+
+async function syncFantasyProsCsvFromInternalRequest(request: Request, env: Env): Promise<HandlerResult<unknown>> {
+  requireCsvImportToken(request, env);
+  const body = await readJson<{ seasonYear?: number; scoring?: RankingScoring; scope?: string; sourceUpdatedAt?: string }>(request);
+  const seasonYear = Number(body.seasonYear ?? new Date().getUTCFullYear());
+  if (!Number.isInteger(seasonYear) || seasonYear < 2020 || seasonYear > 2100) {
+    throw new ApiException(400, "invalid_season_year", "Choose a valid FantasyPros season year.");
+  }
+  const scoring = body.scoring && SCORING.includes(body.scoring) ? body.scoring : "PPR";
+  const result = await syncFantasyProsCsvExportNow(env, {
+    seasonYear,
+    scoring,
+    scope: body.scope,
+    sourceUpdatedAt: body.sourceUpdatedAt,
+  });
+  return { status: 201, data: { ...result, sourceName: SOURCE_NAME, importedAtUtc: new Date().toISOString() } };
+}
+
 async function importFantasyProsCsvFromInternalRequest(request: Request, env: Env): Promise<HandlerResult<unknown>> {
   requireCsvImportToken(request, env);
   const body = await readJson<{ csv?: string; seasonYear?: number; scoring?: RankingScoring; scope?: string; sourceUpdatedAt?: string }>(request);
@@ -377,6 +425,40 @@ function requireCsvImportToken(request: Request, env: Env): void {
   if (!match || match[1].trim() !== expected) {
     throw new ApiException(403, "csv_import_forbidden", "FantasyPros CSV automation token is invalid.");
   }
+}
+
+function fantasyProsExportUrl(scoring: RankingScoring, scope: string): string {
+  const normalizedScope = scope.toLowerCase();
+  const file = normalizedScope === "overall"
+    ? scoring === "PPR"
+      ? "ppr-cheatsheets.php"
+      : scoring === "HALF"
+        ? "half-point-ppr-cheatsheets.php"
+        : "consensus-cheatsheets.php"
+    : `${normalizedScope === "dst" ? "dst" : normalizedScope}-cheatsheets.php`;
+  return `https://www.fantasypros.com/nfl/rankings/${file}?export=xls`;
+}
+
+function fantasyProsExportHtmlToCsv(html: string): string | undefined {
+  const rows = [...html.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)]
+    .map((match) => [...match[1].matchAll(/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi)].map((cell) => decodeHtml(stripTags(cell[1])).trim()))
+    .filter((cells) => cells.some(Boolean));
+  const headerIndex = rows.findIndex((cells) => cells.some((cell) => /player/i.test(cell)));
+  if (headerIndex < 0) return undefined;
+  const headers = rows[headerIndex].map(normalizeExportHeader);
+  const records = rows.slice(headerIndex + 1).map((cells) => {
+    const record = Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ""]));
+    const parsed = parseExportPlayer(record.Player ?? "");
+    return {
+      Rank: record.Rank,
+      Player: parsed.name || record.Player || "",
+      Team: parsed.team || record.Team || "",
+      Position: parseExportPosition(record.Position),
+      Bye: record.Bye ?? "",
+      Tier: /^tier\s+\d+/i.test(record.Rank ?? "") ? (record.Rank.match(/\d+/)?.[0] ?? "") : record.Tier ?? "",
+    };
+  }).filter((row) => Number.isFinite(Number(row.Rank)) && row.Player);
+  return records.length ? toCsv(records) : undefined;
 }
 
 export function scoringFromReceptionPoints(pointsMilli: number): RankingScoring {
@@ -489,6 +571,55 @@ function pick(row: Record<string, string>, names: string[]): string | undefined 
 
 function normalizeHeader(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9#]/g, "");
+}
+
+function normalizeExportHeader(value: string): string {
+  const normalized = value.toLowerCase().replace(/\s+/g, " ").trim();
+  if (normalized === "rk" || normalized === "rank" || normalized === "ecr") return "Rank";
+  if (normalized.includes("player")) return "Player";
+  if (normalized === "pos" || normalized === "position") return "Position";
+  if (normalized.includes("bye")) return "Bye";
+  if (normalized.includes("tier")) return "Tier";
+  if (normalized === "team" || normalized === "tm") return "Team";
+  return value;
+}
+
+function parseExportPlayer(value: string): { name: string; team: string } {
+  const match = value.match(/^(.*?)\s+\(([A-Z]{2,3})\)/);
+  return match ? { name: match[1].trim(), team: match[2] } : { name: value.trim(), team: "" };
+}
+
+function parseExportPosition(value: string | undefined): string {
+  const match = String(value ?? "").match(/[A-Z]+/);
+  return match?.[0] ?? "";
+}
+
+function stripTags(value: string): string {
+  return value.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+}
+
+function decodeHtml(value: string): string {
+  return value
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, "\"")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+function toCsv(rows: Array<Record<string, string | number | undefined>>): string {
+  const headers = ["Rank", "Player", "Team", "Position", "Bye", "Tier"];
+  return [
+    headers.join(","),
+    ...rows.map((row) => headers.map((header) => csvCell(row[header])).join(",")),
+  ].join("\n");
+}
+
+function csvCell(value: unknown): string {
+  const text = String(value ?? "");
+  if (!/[",\n\r]/.test(text)) return text;
+  return `"${text.replace(/"/g, "\"\"")}"`;
 }
 
 function integer(value: unknown, fallback: number): number { const parsed = Number(value); return Number.isFinite(parsed) ? Math.trunc(parsed) : fallback; }
