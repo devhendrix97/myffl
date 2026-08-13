@@ -144,7 +144,7 @@
         "API_BASE_URL": "https://api.myfflapp.com",
         "EMAIL_FROM_ADDRESS": "noreply@myfflapp.com",
         "EMAIL_FROM_NAME": "myFFL",
-        "FANTASYPROS_SYNC_ENABLED": "false",
+        "FANTASYPROS_SYNC_ENABLED": "true",
         "VAPID_PUBLIC_KEY": "BK7W6VzzvZaghb-vUlky8D1p-utUc9TZsE3dIRpga_D-NBKlzxEFEZe0JnVOnKmIGEhJS9JaJmLMlWEgVR31CYA",
         "VAPID_SUBJECT": "mailto:support@myfflapp.com"
       },

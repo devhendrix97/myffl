@@ -16,6 +16,7 @@ obj/
 .wrangler/
 .dev.vars
 .dev.vars.*
+.dev-server*.log
 
 # Secrets and machine-local configuration
 .env

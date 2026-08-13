@@ -6,6 +6,7 @@ import { fullGameReplayFrames, replayScenarioId, replayScenarioName } from "./re
 import { getProviderRuntime } from "./game-feed";
 import { handlePlatformAdminRequest } from "./admin-platform";
 import { handleAdminInvestigationRequest } from "./admin-investigation";
+import { handleAdminProviderCredentialRequest } from "./admin-provider-credentials";
 
 interface AdminPrincipal { userId: string; role: string }
 interface SimulationRow {
@@ -28,6 +29,9 @@ export async function handleAdminRequest(
 ): Promise<HandlerResult<unknown> | Response | undefined> {
   if (!url.pathname.startsWith("/api/admin/")) return undefined;
   const admin = await requirePlatformAdmin(request, env);
+
+  const credentialResult = await handleAdminProviderCredentialRequest(request, url, env, ctx, admin, correlationId);
+  if (credentialResult) return credentialResult;
 
   const platformResult = await handlePlatformAdminRequest(request, url, env, admin, correlationId);
   if (platformResult) return platformResult;

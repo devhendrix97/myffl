@@ -319,6 +319,15 @@ export interface UpdateLeagueSettingsRequest {
   schedule: LeagueScheduleInput;
 }
 
+export interface ResetLeagueSeasonResponse {
+  leagueId: string;
+  seasonId: string;
+  resetAtUtc: string;
+  teamCount: number;
+  draftStatus: "setup";
+  scheduleRegenerated: boolean;
+}
+
 export interface LeagueInvitationResponse {
   invitationCode: string;
   invitationLink: string;
@@ -366,12 +375,15 @@ export interface DraftPlayerView {
   displayName: string;
   position: string;
   nflTeam?: string;
+  headshotUrl?: string;
+  nflTeamLogoUrl?: string;
   rank: number;
   queued: boolean;
   drafted: boolean;
   expertConsensusRank?: number;
   positionRank?: string;
   tier?: number;
+  byeWeek?: number;
   rankingUpdatedAt?: string;
 }
 
@@ -418,6 +430,8 @@ export interface TeamPlayerView {
   displayName: string;
   position: string;
   nflTeam?: string;
+  headshotUrl?: string;
+  nflTeamLogoUrl?: string;
   injuryStatus?: string;
   slotType: string;
   slotIndex: number;
@@ -456,10 +470,14 @@ export interface PlayerProfileResponse {
   displayName: string;
   position: string;
   nflTeam?: string;
+  headshotUrl?: string;
+  nflTeamLogoUrl?: string;
   injuryStatus?: string;
   rosteredByTeamId?: string;
   rosteredByTeamName?: string;
   watched: boolean;
+  availableActions: Array<"add" | "claim" | "trade-for" | "trade-away" | "draft-queue" | "watch">;
+  yearlyStats: Array<{ seasonYear: number; games: number; stats: Record<string, unknown> }>;
   recentGames: Array<{ eventId: string; stats: Record<string, unknown>; fantasyPoints?: number }>;
 }
 
@@ -468,6 +486,8 @@ export interface LeaguePlayerSearchItem {
   displayName: string;
   position: string;
   nflTeam?: string;
+  headshotUrl?: string;
+  nflTeamLogoUrl?: string;
   injuryStatus?: string;
   rosteredByTeamId?: string;
   rosteredByTeamName?: string;
@@ -475,6 +495,7 @@ export interface LeaguePlayerSearchItem {
   expertConsensusRank?: number;
   positionRank?: string;
   tier?: number;
+  byeWeek?: number;
   rankingUpdatedAt?: string;
 }
 
@@ -492,6 +513,7 @@ export interface FantasyProsRankingsResponse {
     overallRank: number;
     positionRank?: string;
     tier?: number;
+    byeWeek?: number;
     sourceUpdatedAt?: string;
     fetchedAtUtc: string;
   }>;
@@ -607,6 +629,8 @@ export interface MatchupPlayerView {
   displayName: string;
   position: string;
   nflTeam?: string;
+  headshotUrl?: string;
+  nflTeamLogoUrl?: string;
   slotType: string;
   starter: boolean;
   points: number;

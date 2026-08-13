@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Data;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -47,6 +48,7 @@ public partial class MainWindow : Window
         await RefreshMonitoringAsync();
         await RefreshProviderAsync();
         await RefreshSimulationAsync();
+        await RefreshFantasyProsAsync();
     }
 
     private async Task RefreshDashboardAsync()
@@ -109,7 +111,7 @@ public partial class MainWindow : Window
     }
 
     private async void SearchPlayers_Click(object sender, RoutedEventArgs e) => await RunUiAction(SearchPlayersAsync);
-    private async Task SearchPlayersAsync() { var data = await SendAsync(HttpMethod.Get, $"/api/admin/players?q={Uri.EscapeDataString(PlayerSearchText.Text.Trim())}"); AdminPlayersGrid.ItemsSource = Rows(data, "items"); }
+    private async Task SearchPlayersAsync() { var data = await SendAsync(HttpMethod.Get, $"/api/admin/players?q={Uri.EscapeDataString(PlayerSearchText.Text.Trim())}&limit=1000"); AdminPlayersGrid.ItemsSource = Rows(data, "items"); }
     private async void AdminPlayersGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         var id = Selected(AdminPlayersGrid, "playerId"); if (id is null) return; ScorePlayerIdText.Text = id;
@@ -147,6 +149,58 @@ public partial class MainWindow : Window
     }
 
     private async void Sync_Click(object sender, RoutedEventArgs e) { var resource = (sender as Button)?.Tag?.ToString() ?? "scoreboard"; await RunUiAction(async () => { await SendAsync(HttpMethod.Post, "/api/admin/provider/sync", new { resource }); await Task.Delay(800); await RefreshProviderAsync(); }); }
+    private async void RefreshFantasyPros_Click(object sender, RoutedEventArgs e) => await RunUiAction(RefreshFantasyProsAsync);
+    private async void SaveFantasyProsCredential_Click(object sender, RoutedEventArgs e) => await RunUiAction(async () =>
+    {
+        var key = string.IsNullOrWhiteSpace(FantasyProsApiKeyInput.Password) ? null : FantasyProsApiKeyInput.Password.Trim();
+        await SendAsync(HttpMethod.Put, "/api/admin/providers/fantasypros/credential", new { apiKey = key, enabled = FantasyProsEnabledToggle.IsChecked == true, reason = FantasyProsReasonText.Text.Trim() });
+        FantasyProsApiKeyInput.Password = string.Empty;
+        FantasyProsReasonText.Text = string.Empty;
+        await RefreshFantasyProsAsync();
+    });
+    private async void SyncFantasyPros_Click(object sender, RoutedEventArgs e) => await RunUiAction(async () =>
+    {
+        await SendAsync(HttpMethod.Post, "/api/admin/providers/fantasypros/sync", new { });
+        StatusText.Text = "FantasyPros ranking refresh accepted";
+        await Task.Delay(1200);
+        await RefreshFantasyProsAsync();
+    });
+    private async void ImportFantasyProsCsv_Click(object sender, RoutedEventArgs e) => await RunUiAction(async () =>
+    {
+        var scoring = (FantasyProsCsvScoringCombo.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "PPR";
+        var result = await SendAsync(HttpMethod.Post, "/api/admin/providers/fantasypros/csv", new
+        {
+            csv = FantasyProsCsvText.Text,
+            seasonYear = int.Parse(FantasyProsCsvSeasonText.Text.Trim(), CultureInfo.InvariantCulture),
+            scoring,
+            scope = FantasyProsCsvScopeText.Text.Trim(),
+            reason = FantasyProsCsvReasonText.Text.Trim()
+        });
+        FantasyProsCsvResultText.Text = $"Imported {Value(result, "imported")} rows; mapped {Value(result, "mapped")} players for {Value(result, "seasonYear")} {Value(result, "scoring")} {Value(result, "scope")}.";
+        FantasyProsCsvReasonText.Text = string.Empty;
+        await RefreshFantasyProsAsync();
+    });
+    private void ClearFantasyProsCsv_Click(object sender, RoutedEventArgs e)
+    {
+        FantasyProsCsvText.Text = string.Empty;
+        FantasyProsCsvResultText.Text = "CSV cleared.";
+    }
+    private async Task RefreshFantasyProsAsync()
+    {
+        var data = await SendAsync(HttpMethod.Get, "/api/admin/providers/fantasypros/credential");
+        var credential = data.GetProperty("credential");
+        var usage = data.GetProperty("usage");
+        var configured = credential.TryGetProperty("configured", out var configuredValue) && configuredValue.GetBoolean();
+        var enabled = credential.TryGetProperty("enabled", out var enabledValue) && enabledValue.GetBoolean();
+        FantasyProsConfiguredText.Text = configured ? enabled ? "Enabled" : "Disabled" : "Not configured";
+        FantasyProsConfiguredText.Foreground = Brush(enabled ? "#72D49A" : configured ? "#F2C76B" : "#F87171");
+        FantasyProsMaskedKeyText.Text = credential.TryGetProperty("maskedKey", out var masked) ? masked.GetString() ?? "-" : "-";
+        FantasyProsValidatedText.Text = credential.TryGetProperty("validatedAtUtc", out var validated) ? validated.GetString() ?? "-" : "-";
+        FantasyProsStorageText.Text = $"Storage: {Value(credential, "storage")}";
+        FantasyProsUsageText.Text = $"{Value(usage, "requestsUsed")} / {Value(usage, "requestLimit")}";
+        FantasyProsEnabledToggle.IsChecked = enabled;
+        FantasyProsRunsGrid.ItemsSource = Rows(data, "recentRuns");
+    }
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RunUiAction(RefreshEverythingAsync);
     private async void CreateSimulation_Click(object sender, RoutedEventArgs e) => await RunUiAction(async () => { var speed = int.Parse(((ComboBoxItem)SpeedCombo.SelectedItem).Tag.ToString()!); var result = await SendAsync(HttpMethod.Post, "/api/admin/simulations", new { speedMultiplier = speed }); _runId = result.GetProperty("runId").GetString(); await SetProviderModeAsync("replay"); await RefreshSimulationAsync(); });
     private async void SimulationAction_Click(object sender, RoutedEventArgs e) { if (_runId is null) { StatusText.Text = "Start a test run first."; return; } var action = (sender as Button)?.Tag?.ToString() ?? "pause"; await RunUiAction(async () => { await SendAsync(HttpMethod.Post, $"/api/admin/simulations/{_runId}/{action}", new { }); if (action == "play") _playTimer.Start(); if (action is "pause" or "stop" or "reset") _playTimer.Stop(); await RefreshSimulationAsync(); }); }
@@ -166,9 +220,36 @@ public partial class MainWindow : Window
         using var request = new HttpRequestMessage(method, ApiUrlTextBox.Text.Trim().TrimEnd('/') + path); if (body is not null) request.Content = JsonContent.Create(body); if (authenticated && _accessToken is null) throw new InvalidOperationException("Sign in first."); using var response = await _http.SendAsync(request); var content = await response.Content.ReadAsStringAsync(); using var document = JsonDocument.Parse(content); var root = document.RootElement; if (!response.IsSuccessStatusCode) { var message = root.TryGetProperty("error", out var error) && error.TryGetProperty("message", out var text) ? text.GetString() : response.ReasonPhrase; throw new InvalidOperationException(message ?? "The request failed."); } return root.GetProperty("data").Clone();
     }
     private async Task RunUiAction(Func<Task> action) { try { StatusText.Text = "Working..."; await action(); StatusText.Text = "Ready"; } catch (Exception ex) { StatusText.Text = ex.Message; MessageBox.Show(ex.Message, "myFFL Admin", MessageBoxButton.OK, MessageBoxImage.Warning); } }
-    private static List<Dictionary<string, string>> Rows(JsonElement parent, string property) => parent.TryGetProperty(property, out var array) && array.ValueKind == JsonValueKind.Array ? JsonRows(array) : [];
-    private static List<Dictionary<string, string>> JsonRows(JsonElement array) => array.EnumerateArray().Select(item => item.ValueKind == JsonValueKind.Object ? item.EnumerateObject().ToDictionary(property => property.Name, property => property.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array ? property.Value.GetRawText() : property.Value.ToString()) : new Dictionary<string, string> { ["value"] = item.ToString() }).ToList();
-    private static string? Selected(DataGrid grid, string key) => grid.SelectedItem is Dictionary<string, string> row && row.TryGetValue(key, out var value) ? value : null;
+    private static DataView Rows(JsonElement parent, string property) => parent.TryGetProperty(property, out var array) && array.ValueKind == JsonValueKind.Array ? JsonRows(array) : EmptyRows();
+    private static DataView JsonRows(JsonElement array)
+    {
+        var table = new DataTable();
+        var rows = array.EnumerateArray().ToList();
+        var columns = rows
+            .Where(item => item.ValueKind == JsonValueKind.Object)
+            .SelectMany(item => item.EnumerateObject().Select(property => property.Name))
+            .Distinct()
+            .ToList();
+        if (columns.Count == 0) columns.Add("value");
+        foreach (var column in columns) table.Columns.Add(column);
+        foreach (var item in rows)
+        {
+            var row = table.NewRow();
+            if (item.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var property in item.EnumerateObject())
+                    row[property.Name] = property.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array ? property.Value.GetRawText() : property.Value.ToString();
+            }
+            else
+            {
+                row["value"] = item.ToString();
+            }
+            table.Rows.Add(row);
+        }
+        return table.DefaultView;
+    }
+    private static DataView EmptyRows() => new DataTable().DefaultView;
+    private static string? Selected(DataGrid grid, string key) => grid.SelectedItem is DataRowView row && row.Row.Table.Columns.Contains(key) ? row[key]?.ToString() : null;
     private static string Value(JsonElement element, string name) => element.TryGetProperty(name, out var value) ? value.ToString() : "0";
     private static string Pretty(JsonElement element) => JsonSerializer.Serialize(element, new JsonSerializerOptions { WriteIndented = true });
     private static string? EmptyNull(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();

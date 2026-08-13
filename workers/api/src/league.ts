@@ -16,6 +16,7 @@ import type {
   RosterPositionLimitInput,
   RosterSlotInput,
   UpdateLeagueSettingsRequest,
+  ResetLeagueSeasonResponse,
 } from "@myffl/api-contracts";
 import { authenticate, type HandlerResult } from "./auth";
 import { ApiException, readJson } from "./http";
@@ -98,7 +99,7 @@ export async function handleLeagueRequest(
     );
   }
 
-  const match = url.pathname.match(/^\/api\/leagues\/([^/]+)(?:\/(settings|invitations|archive|restore))?$/);
+  const match = url.pathname.match(/^\/api\/leagues\/([^/]+)(?:\/(settings|invitations|archive|restore|reset-season))?$/);
   if (!match) return undefined;
   const leagueId = match[1];
   const action = match[2];
@@ -131,7 +132,120 @@ export async function handleLeagueRequest(
       correlationId,
     );
   }
+  if (request.method === "POST" && action === "reset-season") {
+    return resetLeagueSeason(principal, leagueId, env, ctx, correlationId);
+  }
   return undefined;
+}
+
+async function resetLeagueSeason(
+  principal: AccessTokenPrincipal,
+  leagueId: string,
+  env: Env,
+  ctx: ExecutionContext,
+  correlationId: string,
+): Promise<HandlerResult<ResetLeagueSeasonResponse>> {
+  const { db } = await requireLeagueRole(principal, leagueId, env, ["commissioner"]);
+  const league = await getLeagueRow(db, leagueId);
+  const now = new Date().toISOString();
+  const draftId = newId("drf");
+  const resetId = crypto.randomUUID();
+  const teams = await db.prepare("select fantasy_team_id from fantasy_teams where league_season_id = ?1 order by created_at_utc, fantasy_team_id").bind(league.league_season_id).all<{ fantasy_team_id: string }>();
+  const teamRows = teams.results ?? [];
+  const transactionSettings = await db.prepare("select faab_budget_milli from transaction_settings where league_season_id = ?1").bind(league.league_season_id).first<{ faab_budget_milli: number }>();
+  const faabBudgetMilli = transactionSettings?.faab_budget_milli ?? 100000;
+  const roster = await db.prepare(
+    `select coalesce(sum(slots.slot_count), 16) as rounds from roster_slots slots
+     join roster_definitions definitions on definitions.roster_definition_id = slots.roster_definition_id
+     where definitions.league_season_id = ?1 and slots.slot_type not in ('IR','PUP','TAXI')`,
+  ).bind(league.league_season_id).first<{ rounds: number }>();
+  const scoringStatements: D1PreparedStatement[] = [
+    db.prepare("delete from realtime_event_log where league_season_id = ?1").bind(league.league_season_id),
+    db.prepare("delete from weekly_reports where league_season_id = ?1").bind(league.league_season_id),
+    db.prepare("delete from admin_score_corrections where league_season_id = ?1").bind(league.league_season_id),
+    db.prepare("delete from player_event_score_components where league_season_id = ?1").bind(league.league_season_id),
+    db.prepare("delete from player_event_score_revisions where league_season_id = ?1").bind(league.league_season_id),
+    db.prepare("delete from player_event_scores where league_season_id = ?1").bind(league.league_season_id),
+  ];
+  const matchupStatements: D1PreparedStatement[] = [
+    db.prepare("delete from playoff_matchups where playoff_round_id in (select playoff_round_id from playoff_rounds where playoff_bracket_id in (select playoff_bracket_id from playoff_brackets where league_season_id = ?1))").bind(league.league_season_id),
+    db.prepare("delete from playoff_rounds where playoff_bracket_id in (select playoff_bracket_id from playoff_brackets where league_season_id = ?1)").bind(league.league_season_id),
+    db.prepare("delete from playoff_brackets where league_season_id = ?1").bind(league.league_season_id),
+    db.prepare("delete from standing_snapshots where league_season_id = ?1").bind(league.league_season_id),
+    db.prepare("delete from standings where league_season_id = ?1").bind(league.league_season_id),
+    db.prepare("delete from matchup_score_history where matchup_id in (select matchup_id from matchups where league_season_id = ?1)").bind(league.league_season_id),
+    db.prepare("delete from matchup_teams where matchup_id in (select matchup_id from matchups where league_season_id = ?1)").bind(league.league_season_id),
+    db.prepare("delete from matchups where league_season_id = ?1").bind(league.league_season_id),
+    db.prepare("delete from league_schedules where league_season_id = ?1").bind(league.league_season_id),
+  ];
+  const transactionStatements: D1PreparedStatement[] = [
+    db.prepare("delete from trade_votes where trade_id in (select trade_id from trades where league_season_id = ?1)").bind(league.league_season_id),
+    db.prepare("delete from trade_assets where trade_id in (select trade_id from trades where league_season_id = ?1)").bind(league.league_season_id),
+    db.prepare("delete from trade_teams where trade_id in (select trade_id from trades where league_season_id = ?1)").bind(league.league_season_id),
+    db.prepare("delete from traded_draft_picks where league_season_id = ?1").bind(league.league_season_id),
+    db.prepare("delete from trades where league_season_id = ?1").bind(league.league_season_id),
+    db.prepare("delete from waiver_claims where waiver_claim_group_id in (select waiver_claim_group_id from waiver_claim_groups where waiver_period_id in (select waiver_period_id from waiver_periods where league_season_id = ?1))").bind(league.league_season_id),
+    db.prepare("delete from waiver_claim_groups where waiver_period_id in (select waiver_period_id from waiver_periods where league_season_id = ?1)").bind(league.league_season_id),
+    db.prepare("delete from waiver_periods where league_season_id = ?1").bind(league.league_season_id),
+    db.prepare("delete from transaction_assets where transaction_id in (select transaction_id from transactions where league_season_id = ?1)").bind(league.league_season_id),
+    db.prepare("delete from transactions where league_season_id = ?1").bind(league.league_season_id),
+    db.prepare("delete from team_transaction_balances where league_season_id = ?1").bind(league.league_season_id),
+  ];
+  const rosterDraftStatements: D1PreparedStatement[] = [
+    db.prepare("delete from lineup_revisions where lineup_period_id in (select lineup_period_id from lineup_periods where league_season_id = ?1)").bind(league.league_season_id),
+    db.prepare("delete from lineup_assignments where lineup_period_id in (select lineup_period_id from lineup_periods where league_season_id = ?1)").bind(league.league_season_id),
+    db.prepare("delete from lineup_periods where league_season_id = ?1").bind(league.league_season_id),
+    db.prepare("delete from fantasy_roster_players where league_season_id = ?1").bind(league.league_season_id),
+    db.prepare("delete from draft_audit_events where draft_id in (select draft_id from drafts where league_season_id = ?1)").bind(league.league_season_id),
+    db.prepare("delete from draft_queue_players where draft_queue_id in (select draft_queue_id from draft_queues where draft_id in (select draft_id from drafts where league_season_id = ?1))").bind(league.league_season_id),
+    db.prepare("delete from draft_rankings where draft_id in (select draft_id from drafts where league_season_id = ?1)").bind(league.league_season_id),
+    db.prepare("delete from draft_queues where draft_id in (select draft_id from drafts where league_season_id = ?1)").bind(league.league_season_id),
+    db.prepare("delete from draft_picks where draft_id in (select draft_id from drafts where league_season_id = ?1)").bind(league.league_season_id),
+    db.prepare("delete from draft_slots where draft_id in (select draft_id from drafts where league_season_id = ?1)").bind(league.league_season_id),
+    db.prepare("delete from drafts where league_season_id = ?1").bind(league.league_season_id),
+  ];
+  const rebuildStatements: D1PreparedStatement[] = [
+    db.prepare("delete from league_activity where league_id = ?1").bind(leagueId),
+    db.prepare("update league_seasons set status = 'setup', updated_at_utc = ?1, revision_number = revision_number + 1 where league_season_id = ?2").bind(now, league.league_season_id),
+    db.prepare("insert into drafts (draft_id, league_season_id, draft_type, status, rounds, pick_seconds, autopick_enabled, current_overall_pick, revision_number, created_by_user_id, created_at_utc, updated_at_utc) values (?1, ?2, 'snake', 'setup', ?3, 90, 1, 1, 1, ?4, ?5, ?5)").bind(draftId, league.league_season_id, Math.max(1, roster?.rounds ?? 16), principal.userId, now),
+  ];
+  teamRows.forEach((team, index) => {
+    rebuildStatements.push(db.prepare("insert into draft_slots (draft_slot_id, draft_id, slot_number, fantasy_team_id, original_fantasy_team_id, created_at_utc) values (?1, ?2, ?3, ?4, ?4, ?5)").bind(newId("dsl"), draftId, index + 1, team.fantasy_team_id, now));
+    rebuildStatements.push(db.prepare("insert into team_transaction_balances (team_transaction_balance_id, league_season_id, fantasy_team_id, faab_remaining_milli, waiver_priority, updated_at_utc) values (?1, ?2, ?3, ?4, ?5, ?6)").bind(newId("txb"), league.league_season_id, team.fantasy_team_id, faabBudgetMilli, index + 1, now));
+  });
+  rebuildStatements.push(
+    leagueAuditStatement(db, leagueId, principal.userId, "league.season_reset", "league_season", league.league_season_id, correlationId, now, { resetId, teamCount: teamRows.length }),
+    leagueActivityStatement(db, leagueId, principal.userId, "league.season_reset", `${principal.displayName} reset the league season.`, now),
+  );
+  await runResetBatch(db, "scoring", scoringStatements, correlationId, leagueId);
+  await runResetBatch(db, "matchups", matchupStatements, correlationId, leagueId);
+  await runResetBatch(db, "transactions", transactionStatements, correlationId, leagueId);
+  await runResetBatch(db, "roster-draft", rosterDraftStatements, correlationId, leagueId);
+  await runResetBatch(db, "rebuild", rebuildStatements, correlationId, leagueId);
+  queueLeagueAudit(ctx, env, principal.userId, "league.season_reset", leagueId, correlationId);
+  return { data: { leagueId, seasonId: league.league_season_id, resetAtUtc: now, teamCount: teamRows.length, draftStatus: "setup", scheduleRegenerated: true } };
+}
+
+async function runResetBatch(
+  db: D1Database,
+  stage: string,
+  statements: D1PreparedStatement[],
+  correlationId: string,
+  leagueId: string,
+): Promise<void> {
+  try {
+    await db.batch(statements);
+  } catch (error) {
+    console.error(JSON.stringify({
+      level: "error",
+      event: "league_season_reset_failed",
+      stage,
+      correlationId,
+      leagueId,
+      message: error instanceof Error ? error.message : String(error),
+    }));
+    throw error;
+  }
 }
 
 async function listLeagues(

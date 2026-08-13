@@ -1,3 +1,5 @@
 interface Env {
   FANTASYPROS_API_KEY?: string;
+  FANTASYPROS_CSV_IMPORT_TOKEN?: string;
+  PROVIDER_CREDENTIAL_ENCRYPTION_KEY?: string;
 }

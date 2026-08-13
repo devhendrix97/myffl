@@ -21,16 +21,15 @@ The league's active reception rule selects STD, HALF, or PPR automatically. Draf
 
 ## Licensed Setup
 
-After FantasyPros confirms that the key may be used in production:
+After FantasyPros confirms that the key may be used in production, an owner can manage it from the **Provider Credentials** tab in myFFL Admin. Saving a replacement key validates it against FantasyPros before it replaces the active credential. The plaintext key is never returned to the Admin app; it is encrypted at rest and all changes are audited.
 
-1. Set the Worker secret without placing it in source control:
+The original Cloudflare secret remains a recovery fallback. Initial infrastructure setup requires these encrypted Worker secrets without placing either in source control:
 
-   ```powershell
-   pnpm exec wrangler secret put FANTASYPROS_API_KEY --config workers/api/wrangler.jsonc --env production
-   ```
+```powershell
+pnpm exec wrangler secret put FANTASYPROS_API_KEY --config workers/api/wrangler.jsonc --env production
+pnpm exec wrangler secret put PROVIDER_CREDENTIAL_ENCRYPTION_KEY --config workers/api/wrangler.jsonc --env production
+```
 
-2. Change the production `FANTASYPROS_SYNC_ENABLED` value in `workers/api/wrangler.jsonc` from `false` to `true`.
-3. Regenerate Worker types, run tests and a dry run, then deploy.
-4. Inspect `fantasypros_sync_runs` for request count, mapping coverage, failures, and freshness.
+The Admin screen shows the masked key suffix, storage source, enabled state, validation timestamp, daily request usage, and recent request ledger. It also provides an audited manual snapshot refresh. Validation and manual refresh requests use the same database-backed daily circuit breaker as scheduled synchronization.
 
 The draft board and league Players tab always display the attribution: "FantasyPros Expert Consensus Rankings," linked to the FantasyPros consensus rankings page.

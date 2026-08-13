@@ -42,10 +42,10 @@
     "api": {
       "name": "myffl-api-production",
       "custom_domain": "api.myfflapp.com",
-      "latest_version_id": "6dae0ff6-f50e-4ac0-88b6-6a88a26e53c1",
+      "latest_version_id": "61eec4ed-bfda-4d8b-9852-772b4161e906",
       "dns_status": "active",
       "health_status": "healthy",
-      "application_version": "1.1.0"
+      "application_version": "1.2.0"
     }
   },
   "r2_buckets": {

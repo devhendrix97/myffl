@@ -5,6 +5,7 @@ const PROVIDER = "espn";
 const PARSER_VERSION = "espn-nfl-1.0.0";
 const PRODUCTION_SCOPE = "production";
 const MAX_PAYLOAD_BYTES = 12 * 1024 * 1024;
+const PROVIDER_ASSET_PREFIX = "provider-assets/espn/nfl";
 
 export type ProviderJob =
   | { type: "sync-teams" }
@@ -49,9 +50,10 @@ export async function enqueueScheduledProviderWork(env: Env): Promise<void> {
   const bootstrap = await env.NFL_DB.prepare(
     `select
       (select count(*) from nfl_teams) as teamCount,
+      (select count(*) from nfl_teams where logo_object_key is null) as teamsMissingLogos,
       (select count(*) from nfl_player_injuries where data_scope = 'production') as injuryCount`,
-  ).first<{ teamCount: number; injuryCount: number }>();
-  if ((bootstrap?.teamCount ?? 0) < 32) jobs.push({ type: "sync-teams" });
+  ).first<{ teamCount: number; teamsMissingLogos: number; injuryCount: number }>();
+  if ((bootstrap?.teamCount ?? 0) < 32 || (bootstrap?.teamsMissingLogos ?? 0) > 0) jobs.push({ type: "sync-teams" });
   if ((bootstrap?.injuryCount ?? 0) === 0) jobs.push({ type: "sync-injuries" });
   if (now.getUTCHours() === 8 && now.getUTCMinutes() === 0) jobs.push({ type: "sync-injuries" });
   if (now.getUTCDay() === 2 && now.getUTCHours() === 9 && now.getUTCMinutes() === 0) {
@@ -225,15 +227,21 @@ async function upsertTeam(context: SyncContext, team: JsonObject): Promise<strin
   const id = `espn-team-${providerId}`;
   const abbreviation = string(team.abbreviation) ?? "UNK";
   const displayName = string(team.displayName) ?? string(team.name) ?? abbreviation;
-  const logo = array(team.logos).map(object).map((value) => string(value.href)).find(Boolean);
+  const logo = imageUrl(team.logos) ?? imageUrl(team.logo);
+  const logoKey = logo ? `provider-assets/espn/nfl/teams/${providerId}/logo` : null;
+  if (logo && logoKey) await cacheProviderImage(context, logoKey, logo);
   await context.env.NFL_DB.batch([
     context.env.NFL_DB.prepare(
       `insert into nfl_teams
-        (nfl_team_id, provider, provider_team_id, abbreviation, display_name, created_at_utc, updated_at_utc)
-       values (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+        (nfl_team_id, provider, provider_team_id, abbreviation, display_name,
+         logo_object_key, logo_source_url, created_at_utc, updated_at_utc)
+       values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
        on conflict(provider, provider_team_id) do update set abbreviation = excluded.abbreviation,
-        display_name = excluded.display_name, updated_at_utc = excluded.updated_at_utc`,
-    ).bind(id, PROVIDER, providerId, abbreviation, displayName, context.now),
+        display_name = excluded.display_name,
+        logo_object_key = coalesce(excluded.logo_object_key, nfl_teams.logo_object_key),
+        logo_source_url = coalesce(excluded.logo_source_url, nfl_teams.logo_source_url),
+        updated_at_utc = excluded.updated_at_utc`,
+    ).bind(id, PROVIDER, providerId, abbreviation, displayName, logoKey, logo ?? null, context.now),
     context.env.NFL_DB.prepare(
       `insert into nfl_team_snapshots
         (nfl_team_id, data_scope, abbreviation, display_name, logo_url, color_hex,
@@ -321,18 +329,24 @@ async function ingestSummary(context: SyncContext, payload: JsonObject, eventPro
         const playerId = `espn-player-${providerPlayerId}`;
         const position = string(object(athlete.position).abbreviation) ?? null;
         const displayName = string(athlete.displayName) ?? `ESPN Player ${providerPlayerId}`;
+        const headshot = imageUrl(athlete.headshot) ?? imageUrl(athlete.headshots);
+        const headshotKey = headshot ? `${PROVIDER_ASSET_PREFIX}/athletes/${providerPlayerId}/headshot` : null;
+        if (headshot && headshotKey) await cacheProviderImage(context, headshotKey, headshot);
         const stats = array(athleteEntry.stats);
         const normalized = normalizeCategoryStats(categoryName, labels, stats);
         statements.push(
           context.env.NFL_DB.prepare(
             `insert into nfl_players
-              (nfl_player_id, display_name, position, current_team_id, created_at_utc, updated_at_utc)
-             values (?1, ?2, ?3, ?4, ?5, ?5)
+              (nfl_player_id, display_name, position, current_team_id,
+               headshot_object_key, headshot_source_url, created_at_utc, updated_at_utc)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
              on conflict(nfl_player_id) do update set display_name = excluded.display_name,
               position = coalesce(excluded.position, nfl_players.position),
               current_team_id = coalesce(excluded.current_team_id, nfl_players.current_team_id),
+              headshot_object_key = coalesce(excluded.headshot_object_key, nfl_players.headshot_object_key),
+              headshot_source_url = coalesce(excluded.headshot_source_url, nfl_players.headshot_source_url),
               updated_at_utc = excluded.updated_at_utc`,
-          ).bind(playerId, displayName, position, teamId ?? null, context.now),
+          ).bind(playerId, displayName, position, teamId ?? null, headshotKey, headshot ?? null, context.now),
           context.env.NFL_DB.prepare(
             `insert into provider_player_mappings
               (provider, provider_player_id, nfl_player_id, created_at_utc)
@@ -432,16 +446,22 @@ async function ingestInjuries(context: SyncContext, payload: JsonObject): Promis
       const playerId = `espn-player-${providerPlayerId}`;
       const displayName = string(athlete.displayName) ?? `ESPN Player ${providerPlayerId}`;
       const position = string(object(athlete.position).abbreviation) ?? null;
+      const headshot = imageUrl(athlete.headshot) ?? imageUrl(athlete.headshots);
+      const headshotKey = headshot ? `${PROVIDER_ASSET_PREFIX}/athletes/${providerPlayerId}/headshot` : null;
+      if (headshot && headshotKey) await cacheProviderImage(context, headshotKey, headshot);
       statements.push(
         context.env.NFL_DB.prepare(
           `insert into nfl_players
-            (nfl_player_id, display_name, position, current_team_id, created_at_utc, updated_at_utc)
-           values (?1, ?2, ?3, ?4, ?5, ?5)
+            (nfl_player_id, display_name, position, current_team_id,
+             headshot_object_key, headshot_source_url, created_at_utc, updated_at_utc)
+           values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
            on conflict(nfl_player_id) do update set display_name = excluded.display_name,
             position = coalesce(excluded.position, nfl_players.position),
             current_team_id = coalesce(excluded.current_team_id, nfl_players.current_team_id),
+            headshot_object_key = coalesce(excluded.headshot_object_key, nfl_players.headshot_object_key),
+            headshot_source_url = coalesce(excluded.headshot_source_url, nfl_players.headshot_source_url),
             updated_at_utc = excluded.updated_at_utc`,
-        ).bind(playerId, displayName, position, teamId ?? null, context.now),
+        ).bind(playerId, displayName, position, teamId ?? null, headshotKey, headshot ?? null, context.now),
         context.env.NFL_DB.prepare(
           `insert into provider_player_mappings
             (provider, provider_player_id, nfl_player_id, created_at_utc)
@@ -480,6 +500,36 @@ function warn(context: SyncContext, path: string, message: string): undefined {
      values (?1, ?2, ?3, ?4, ?5, ?6)`,
   ).bind(crypto.randomUUID(), context.runId, context.resource, path, message, context.now).run().catch(() => undefined));
   return undefined;
+}
+
+async function cacheProviderImage(context: SyncContext, key: string, sourceUrl: string): Promise<void> {
+  try {
+    const existing = await context.env.ASSETS_BUCKET.head(key);
+    if (existing?.customMetadata?.sourceUrl === sourceUrl) return;
+    const response = await fetch(sourceUrl, {
+      headers: { accept: "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8,*/*;q=0.5" },
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!response.ok || !response.body) return;
+    const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
+    if (!contentType?.startsWith("image/")) return;
+    await context.env.ASSETS_BUCKET.put(key, response.body, {
+      httpMetadata: { contentType, cacheControl: "public, max-age=31536000, immutable" },
+      customMetadata: { provider: PROVIDER, sourceUrl, fetchedAtUtc: context.now },
+    });
+  } catch {
+    warn(context, "provider.image", `Could not cache provider image ${key}`);
+  }
+}
+
+function imageUrl(value: unknown): string | undefined {
+  if (typeof value === "string" && /^https:\/\//i.test(value)) return value;
+  for (const item of array(value)) {
+    const found = imageUrl(item);
+    if (found) return found;
+  }
+  const obj = object(value);
+  return [string(obj.href), string(obj.url), string(obj.src)].find((item) => item && /^https:\/\//i.test(item));
 }
 
 export function normalizeCategoryStats(category: string, labels: string[], stats: unknown[]): Record<string, unknown> {

@@ -41,6 +41,7 @@ import type {
   TransactionSettingsResponse,
   UpdateLeagueSettingsRequest,
   WeeklyReportResponse,
+  ResetLeagueSeasonResponse,
 } from "@myffl/api-contracts";
 import {
   Archive,
@@ -522,6 +523,8 @@ const initialRosterPositionLimits: RosterPositionLimitInput[] = [
   { position: "DB", displayName: "Defensive Back", minimum: 0, maximum: 8 },
 ];
 
+const nflTeams = ["ARI","ATL","BAL","BUF","CAR","CHI","CIN","CLE","DAL","DEN","DET","GB","HOU","IND","JAX","KC","LAC","LAR","LV","MIA","MIN","NE","NO","NYG","NYJ","PHI","PIT","SEA","SF","TB","TEN","WAS"];
+
 const initialSchedule: LeagueScheduleInput = {
   regularSeasonStartWeek: 1,
   regularSeasonEndWeek: 14,
@@ -936,6 +939,22 @@ function LeagueDetailView({
     }
   }
 
+  async function resetSeason() {
+    const phrase = window.prompt("This will clear draft picks, rosters, lineups, schedule, matchups, standings, transactions, waivers, trades, and league activity while keeping members and team names. Type RESET to continue.");
+    if (phrase !== "RESET") return;
+    setBusy(true);
+    setError("");
+    try {
+      await leagueRequest<ResetLeagueSeasonResponse>(`/api/leagues/${league.leagueId}/reset-season`, accessToken, { method: "POST", body: {} });
+      onChanged(await leagueRequest<LeagueDetail>(`/api/leagues/${league.leagueId}`, accessToken));
+      setTab("overview");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Unable to reset this league season.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="league-page detail-page">
       <button className="back-button" type="button" onClick={onBack}><ArrowLeft size={19} /> All leagues</button>
@@ -985,7 +1004,7 @@ function LeagueDetailView({
       {tab === "members" && <MembersView league={league} />}
       {tab === "team" && <TeamView league={league} accessToken={accessToken} />}
       {tab === "gameday" && <GamedayView league={league} accessToken={accessToken} canManage={canManage} />}
-      {tab === "players" && <PlayersView league={league} accessToken={accessToken} />}
+      {tab === "players" && <PlayersView league={league} accessToken={accessToken} onNavigate={setTab} />}
       {tab === "transactions" && <TransactionsView league={league} accessToken={accessToken} canManage={canManage} />}
       {tab === "draft" && <DraftView league={league} accessToken={accessToken} />}
       {tab === "chat" && <CommunityView league={league} accessToken={accessToken} canManage={canManage} />}
@@ -1000,6 +1019,7 @@ function LeagueDetailView({
           onError={setError}
           onChanged={onChanged}
           onArchive={() => void setArchived(league.status !== "archived")}
+          onResetSeason={() => void resetSeason()}
         />
       )}
     </div>
@@ -1270,10 +1290,13 @@ function TransactionsView({ league, accessToken, canManage }: { league: LeagueDe
   </div>;
 }
 
-function PlayersView({ league, accessToken }: { league: LeagueDetail; accessToken: string }) {
+function PlayersView({ league, accessToken, onNavigate }: { league: LeagueDetail; accessToken: string; onNavigate: (tab: LeagueTab) => void }) {
   const [players, setPlayers] = useState<LeaguePlayerSearchItem[]>([]);
   const [query, setQuery] = useState("");
   const [position, setPosition] = useState("");
+  const [teamFilter, setTeamFilter] = useState("");
+  const [sort, setSort] = useState("rank");
+  const [availableOnly, setAvailableOnly] = useState(false);
   const [watchedOnly, setWatchedOnly] = useState(false);
   const [profile, setProfile] = useState<PlayerProfileResponse | null>(null);
   const [compare, setCompare] = useState<PlayerProfileResponse[]>([]);
@@ -1287,6 +1310,9 @@ function PlayersView({ league, accessToken }: { league: LeagueDetail; accessToke
         const params = new URLSearchParams({ limit: "120" });
         if (query.trim()) params.set("query", query.trim());
         if (position) params.set("position", position);
+        if (teamFilter) params.set("team", teamFilter);
+        if (sort) params.set("sort", sort);
+        if (availableOnly) params.set("available", "true");
         if (watchedOnly) params.set("watched", "true");
         const next = await leagueRequest<LeaguePlayerSearchItem[]>(`/api/leagues/${league.leagueId}/players?${params}`, accessToken);
         if (active) { setPlayers(next); setError(""); }
@@ -1295,7 +1321,7 @@ function PlayersView({ league, accessToken }: { league: LeagueDetail; accessToke
       } finally { if (active) setBusy(false); }
     }, 180);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [accessToken, league.leagueId, position, query, watchedOnly, profile?.watched]);
+  }, [accessToken, availableOnly, league.leagueId, position, query, sort, teamFilter, watchedOnly, profile?.watched]);
 
   async function openProfile(playerId: string, addToComparison = false) {
     try {
@@ -1311,14 +1337,42 @@ function PlayersView({ league, accessToken }: { league: LeagueDetail; accessToke
     catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to update the watchlist."); }
   }
 
+  function handleProfileAction(action: PlayerProfileResponse["availableActions"][number]) {
+    if (action === "watch") { void toggleWatch(); return; }
+    if (action === "draft-queue") { onNavigate("draft"); return; }
+    onNavigate("transactions");
+  }
+
+  if (profile) return <div className="player-directory player-profile-page">
+    {error && <InlineAlert message={error} onClose={() => setError("")}/>}
+    <button className="back-button" type="button" onClick={() => setProfile(null)}><ArrowLeft size={18}/> Player pool</button>
+    <section className="player-profile detail-mode">
+      <div className="profile-title"><PlayerAvatar src={profile.headshotUrl} name={profile.displayName} size="lg"/><div><p className="eyebrow">{profile.position} - {profile.nflTeam ?? "Free agent"}</p><h2 id="directory-profile-title">{profile.displayName}</h2><p>{profile.rosteredByTeamName ? `Rostered by ${profile.rosteredByTeamName}` : "Available player"}</p></div></div>
+      {profile.injuryStatus && <span className="profile-injury">{profile.injuryStatus}</span>}
+      <div className="profile-actions">{profile.availableActions.map((action) => <button className={action === "claim" || action === "add" ? "primary-button compact" : "outline-button compact"} key={action} onClick={() => handleProfileAction(action)}>{profileActionLabel(action, profile.watched)}</button>)}</div>
+      <div className="profile-stats-grid">
+        <section className="profile-games"><h3>Yearly stats</h3>{profile.yearlyStats.length ? profile.yearlyStats.map((season) => <div key={season.seasonYear}><span>{season.seasonYear}<small>{season.games} games</small></span><code>{formatProviderStats(season.stats as Record<string, string>)}</code></div>) : <p className="muted-empty">Yearly totals will appear after myFFL has ingested season game logs for this player.</p>}</section>
+        <section className="profile-games"><h3>Recent games</h3>{profile.recentGames.length ? profile.recentGames.map((game) => <div key={game.eventId}><span>{game.eventId}</span><code>{formatProviderStats(game.stats as Record<string, string>)}</code></div>) : <p className="muted-empty">No recent production game statistics.</p>}</section>
+      </div>
+    </section>
+  </div>;
+
   return <div className="player-directory">
     {error && <InlineAlert message={error} onClose={() => setError("")}/>}
     <header className="directory-heading"><div><p className="eyebrow">League player pool</p><h2>Players</h2><span>Search availability, injuries, profiles, and recent performance.</span></div></header>
     <FantasyProsAttribution updatedAt={players.find((player) => player.rankingUpdatedAt)?.rankingUpdatedAt}/>
-    <div className="directory-toolbar"><label><Search size={16}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search NFL players"/></label><select aria-label="Filter by position" value={position} onChange={(event) => setPosition(event.target.value)}><option value="">All positions</option>{["QB","RB","WR","TE","K","DST","DL","LB","DB"].map((item) => <option key={item}>{item}</option>)}</select><label className="watch-filter"><input type="checkbox" checked={watchedOnly} onChange={(event) => setWatchedOnly(event.target.checked)}/> Watchlist</label></div>
-    <div className="directory-layout"><section className="directory-table">{busy ? <div className="workspace-loading"><LoaderCircle className="spin" size={24}/><span>Loading players</span></div> : players.length ? players.map((player) => <div className="directory-row" key={player.playerId}><b className="expert-rank" title="FantasyPros Expert Consensus Rank">{player.expertConsensusRank ?? "-"}</b><button className="player-name-button" onClick={() => void openProfile(player.playerId)}><strong>{player.displayName}</strong><small>{player.positionRank ? `${player.positionRank} - ` : ""}{player.position} - {player.nflTeam ?? "FA"}</small></button><span className={player.rosteredByTeamName ? "ownership rostered" : "ownership available"}>{player.rosteredByTeamName ?? "Available"}</span><span>{player.injuryStatus ?? "Healthy"}</span><button className="icon-button" title="Compare player" aria-label={`Compare ${player.displayName}`} onClick={() => void openProfile(player.playerId, true)}><SlidersHorizontal size={16}/></button></div>) : <p className="muted-empty">No players match these filters.</p>}</section><aside className="directory-compare"><p className="eyebrow">Head to head</p><h3>Comparison</h3>{compare.length ? compare.map((player) => <div key={player.playerId}><strong>{player.displayName}</strong><span>{player.position} - {player.nflTeam ?? "FA"}</span><small>{player.injuryStatus ?? "No injury designation"}</small><b>{player.rosteredByTeamName ?? "Available"}</b></div>) : <p className="muted-empty">Use the compare control beside up to two players.</p>}</aside></div>
-    {profile && <div className="profile-scrim" role="presentation" onMouseDown={() => setProfile(null)}><section className="player-profile" role="dialog" aria-modal="true" aria-labelledby="directory-profile-title" onMouseDown={(event) => event.stopPropagation()}><button className="icon-button profile-close" aria-label="Close player profile" onClick={() => setProfile(null)}><X size={18}/></button><p className="eyebrow">{profile.position} - {profile.nflTeam ?? "Free agent"}</p><h2 id="directory-profile-title">{profile.displayName}</h2><p>{profile.rosteredByTeamName ? `Rostered by ${profile.rosteredByTeamName}` : "Available player"}</p>{profile.injuryStatus && <span className="profile-injury">{profile.injuryStatus}</span>}<button className="outline-button compact" onClick={() => void toggleWatch()}>{profile.watched ? "Remove watch" : "Add to watchlist"}</button><div className="profile-games"><h3>Recent games</h3>{profile.recentGames.length ? profile.recentGames.map((game) => <div key={game.eventId}><span>{game.eventId}</span><code>{formatProviderStats(game.stats as Record<string, string>)}</code></div>) : <p className="muted-empty">No recent production game statistics.</p>}</div></section></div>}
+    <div className="directory-toolbar"><label><Search size={16}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search NFL players"/></label><select aria-label="Sort players" value={sort} onChange={(event) => setSort(event.target.value)}><option value="rank">Best available rank</option><option value="name">A to Z</option><option value="name-desc">Z to A</option><option value="team">By NFL team</option><option value="position">By position</option></select><select aria-label="Filter by position" value={position} onChange={(event) => setPosition(event.target.value)}><option value="">All positions</option>{["QB","RB","WR","TE","K","DST","DL","LB","DB"].map((item) => <option key={item}>{item}</option>)}</select><select aria-label="Filter by NFL team" value={teamFilter} onChange={(event) => setTeamFilter(event.target.value)}><option value="">All NFL teams</option>{nflTeams.map((item) => <option key={item}>{item}</option>)}</select><label className="watch-filter"><input type="checkbox" checked={availableOnly} onChange={(event) => setAvailableOnly(event.target.checked)}/> Available</label><label className="watch-filter"><input type="checkbox" checked={watchedOnly} onChange={(event) => setWatchedOnly(event.target.checked)}/> Watchlist</label></div>
+    <div className="directory-layout"><section className="directory-table">{busy ? <div className="workspace-loading"><LoaderCircle className="spin" size={24}/><span>Loading players</span></div> : players.length ? players.map((player) => <div className="directory-row" key={player.playerId}><b className="expert-rank" title="FantasyPros Expert Consensus Rank">{player.expertConsensusRank ?? "-"}</b><PlayerAvatar src={player.headshotUrl} name={player.displayName}/><button className="player-name-button" onClick={() => void openProfile(player.playerId)}><strong>{player.displayName}</strong><small>{player.positionRank ? `${player.positionRank} - ` : ""}{player.position} - {player.nflTeam ?? "FA"}{player.byeWeek ? ` - Bye ${player.byeWeek}` : ""}</small></button><span className={player.rosteredByTeamName ? "ownership rostered" : "ownership available"}>{player.rosteredByTeamName ?? "Available"}</span><span>{player.injuryStatus ?? "Healthy"}</span><button className="icon-button" title="Compare player" aria-label={`Compare ${player.displayName}`} onClick={() => void openProfile(player.playerId, true)}><SlidersHorizontal size={16}/></button></div>) : <p className="muted-empty">No players match these filters.</p>}</section><aside className="directory-compare"><p className="eyebrow">Head to head</p><h3>Comparison</h3>{compare.length ? compare.map((player) => <div key={player.playerId}><strong>{player.displayName}</strong><span>{player.position} - {player.nflTeam ?? "FA"}</span><small>{player.injuryStatus ?? "No injury designation"}</small><b>{player.rosteredByTeamName ?? "Available"}</b></div>) : <p className="muted-empty">Use the compare control beside up to two players.</p>}</aside></div>
   </div>;
+}
+
+function profileActionLabel(action: PlayerProfileResponse["availableActions"][number], watched: boolean): string {
+  if (action === "add") return "Add player";
+  if (action === "claim") return "Submit claim";
+  if (action === "trade-for") return "Trade for this player";
+  if (action === "trade-away") return "Trade this player";
+  if (action === "draft-queue") return "Add to draft queue";
+  return watched ? "Remove watch" : "Add to watchlist";
 }
 
 function TeamView({ league, accessToken }: { league: LeagueDetail; accessToken: string }) {
@@ -1401,11 +1455,11 @@ function TeamView({ league, accessToken }: { league: LeagueDetail; accessToken: 
       <section className="lineup-sheet"><div className="section-heading"><div><p className="eyebrow">Week {week}</p><h2>Lineup</h2></div><span>Saved revision {lineup.revisionNumber}</span></div><div className="lineup-list">{slots.map((slot) => {
         const player = lineup.players.find((item) => item.slotType === slot.slotType && item.slotIndex === slot.slotIndex);
         const destination = Boolean(selected && selected.eligibleSlots.includes(slot.slotType) && !selected.locked && selected.rosterPlayerId !== player?.rosterPlayerId);
-        return <button className={`lineup-row ${selectedId === player?.rosterPlayerId ? "selected" : ""} ${destination ? "destination" : ""}`} type="button" key={`${slot.slotType}-${slot.slotIndex}`} onClick={() => destination ? void moveSelected(slot.slotType, slot.slotIndex) : player && setSelectedId(selectedId === player.rosterPlayerId ? null : player.rosterPlayerId)}><b>{slot.slotType}{slot.slotIndex > 1 ? ` ${slot.slotIndex}` : ""}</b>{player ? <><span><strong>{player.displayName}</strong><small>{player.position} - {player.nflTeam ?? "FA"}{player.injuryStatus ? ` - ${player.injuryStatus}` : ""}</small></span><span className={player.locked ? "player-lock locked" : "player-lock"}>{player.locked ? "Locked" : "Open"}</span><span className="lineup-points">{player.fantasyPoints ?? "-"}</span></> : <span className="empty-lineup-slot">Empty slot</span>}</button>;
+        return <button className={`lineup-row ${selectedId === player?.rosterPlayerId ? "selected" : ""} ${destination ? "destination" : ""}`} type="button" key={`${slot.slotType}-${slot.slotIndex}`} onClick={() => destination ? void moveSelected(slot.slotType, slot.slotIndex) : player && setSelectedId(selectedId === player.rosterPlayerId ? null : player.rosterPlayerId)}><b>{slot.slotType}{slot.slotIndex > 1 ? ` ${slot.slotIndex}` : ""}</b>{player ? <><PlayerAvatar src={player.headshotUrl} name={player.displayName}/><span><strong>{player.displayName}</strong><small>{player.position} - {player.nflTeam ?? "FA"}{player.injuryStatus ? ` - ${player.injuryStatus}` : ""}</small></span><span className={player.locked ? "player-lock locked" : "player-lock"}>{player.locked ? "Locked" : "Open"}</span><span className="lineup-points">{player.fantasyPoints ?? "-"}</span></> : <span className="empty-lineup-slot">Empty slot</span>}</button>;
       })}</div></section>
       <aside className="team-side"><div className="section-heading"><div><p className="eyebrow">Roster tools</p><h2>{selected ? selected.displayName : "Lineup controls"}</h2></div></div><button className="primary-button compact team-optimize" disabled={busy} onClick={() => void previewOptimization()}><SlidersHorizontal size={16}/> Optimize lineup</button>{selected ? <><p className="team-selection-note">Choose a highlighted destination to save an immediate swap.</p><button className="outline-button compact" onClick={() => void openProfile(selected.playerId)}>Player profile</button><button className="outline-button compact" onClick={async () => { const next = await leagueRequest<PlayerProfileResponse>(`/api/leagues/${league.leagueId}/players/${selected.playerId}`, accessToken); setCompare((current) => [...current.filter((item) => item.playerId !== next.playerId), next].slice(-2)); }}>Compare</button>{selected.locked && <p className="lineup-lock-note">This player is locked at NFL kickoff. Other players remain editable.</p>}</> : <p className="muted-empty">Select a roster row to move, inspect, or compare a player.</p>}{optimization && <div className="optimization-preview"><p className="eyebrow">Preview</p><h3>{optimization.changes.length ? `${optimization.changes.length} recommended moves` : "Lineup already optimized"}</h3>{optimization.changes.map((change) => <p key={change.rosterPlayerId}><strong>{change.displayName}</strong><span>{change.fromSlot} to {change.toSlot}</span></p>)}{optimization.changes.length > 0 && <button className="primary-button compact" disabled={busy} onClick={() => void applyOptimization()}><Check size={16}/> Confirm lineup</button>}<button className="outline-button compact" onClick={() => setOptimization(null)}>Dismiss preview</button></div>}{compare.length > 0 && <div className="player-compare"><p className="eyebrow">Comparison</p>{compare.map((player) => <div key={player.playerId}><strong>{player.displayName}</strong><span>{player.position} {player.nflTeam}</span><small>{player.injuryStatus ?? "No injury designation"}</small></div>)}</div>}</aside>
     </div>
-    {profile && <div className="profile-scrim" role="presentation" onMouseDown={() => setProfile(null)}><section className="player-profile" role="dialog" aria-modal="true" aria-labelledby="player-profile-title" onMouseDown={(event) => event.stopPropagation()}><button className="icon-button profile-close" aria-label="Close player profile" onClick={() => setProfile(null)}><X size={18}/></button><p className="eyebrow">{profile.position} - {profile.nflTeam ?? "Free agent"}</p><h2 id="player-profile-title">{profile.displayName}</h2><p>{profile.rosteredByTeamName ? `Rostered by ${profile.rosteredByTeamName}` : "Available player"}</p>{profile.injuryStatus && <span className="profile-injury">{profile.injuryStatus}</span>}<button className="outline-button compact" onClick={() => void toggleWatch()}>{profile.watched ? "Remove watch" : "Add to watchlist"}</button><div className="profile-games"><h3>Recent games</h3>{profile.recentGames.length ? profile.recentGames.map((game) => <div key={game.eventId}><span>{game.eventId}</span><code>{formatProviderStats(game.stats as Record<string, string>)}</code></div>) : <p className="muted-empty">No recent production game statistics.</p>}</div></section></div>}
+    {profile && <div className="profile-scrim" role="presentation" onMouseDown={() => setProfile(null)}><section className="player-profile" role="dialog" aria-modal="true" aria-labelledby="player-profile-title" onMouseDown={(event) => event.stopPropagation()}><button className="icon-button profile-close" aria-label="Close player profile" onClick={() => setProfile(null)}><X size={18}/></button><div className="profile-title"><PlayerAvatar src={profile.headshotUrl} name={profile.displayName} size="lg"/><div><p className="eyebrow">{profile.position} - {profile.nflTeam ?? "Free agent"}</p><h2 id="player-profile-title">{profile.displayName}</h2><p>{profile.rosteredByTeamName ? `Rostered by ${profile.rosteredByTeamName}` : "Available player"}</p></div></div>{profile.injuryStatus && <span className="profile-injury">{profile.injuryStatus}</span>}<button className="outline-button compact" onClick={() => void toggleWatch()}>{profile.watched ? "Remove watch" : "Add to watchlist"}</button><div className="profile-games"><h3>Recent games</h3>{profile.recentGames.length ? profile.recentGames.map((game) => <div key={game.eventId}><span>{game.eventId}</span><code>{formatProviderStats(game.stats as Record<string, string>)}</code></div>) : <p className="muted-empty">No recent production game statistics.</p>}</div></section></div>}
   </div>;
 }
 
@@ -1415,6 +1469,12 @@ function FantasyProsAttribution({ updatedAt }: { updatedAt?: string }) {
   return <div className="fantasypros-attribution"><Trophy size={15}/><span>Draft rankings powered by <a href="https://www.fantasypros.com/nfl/rankings/consensus-cheatsheets.php" target="_blank" rel="noreferrer">FantasyPros Expert Consensus Rankings <ExternalLink size={12}/></a>{updatedAt ? ` - updated ${formatDate(updatedAt)}` : ". Rankings appear when a licensed snapshot is available; otherwise myFFL ordering is used."}</span></div>;
 }
 
+function PlayerAvatar({ src, name, size = "sm" }: { src?: string; name: string; size?: "sm" | "lg" }) {
+  const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "NFL";
+  return src
+    ? <img className={`player-avatar ${size}`} src={src} alt="" loading="lazy" referrerPolicy="no-referrer" />
+    : <span className={`player-avatar fallback ${size}`} aria-hidden="true">{initials}</span>;
+}
 function DraftView({ league, accessToken }: { league: LeagueDetail; accessToken: string }) {
   const [room, setRoom] = useState<DraftRoomResponse | null>(null);
   const [players, setPlayers] = useState<DraftPlayerView[]>([]);
@@ -1471,6 +1531,7 @@ function DraftView({ league, accessToken }: { league: LeagueDetail; accessToken:
 
   async function command(action: string, body: Record<string, unknown> = {}) {
     if (!room) return;
+    if (action === "reset" && !window.confirm("Reset this draft? This removes all active draft picks, clears draft-added roster players, and returns the draft to setup.")) return;
     setBusy(true);
     try {
       setRoom(await leagueRequest<DraftRoomResponse>(`/api/leagues/${league.leagueId}/draft/${action}`, accessToken, {
@@ -1546,6 +1607,7 @@ function DraftView({ league, accessToken }: { league: LeagueDetail; accessToken:
           <button className="icon-button" title="Undo last pick" aria-label="Undo last pick" onClick={() => void command("undo")}><Undo2 size={18}/></button>
           <button className="icon-button" title="Skip current pick" aria-label="Skip current pick" disabled={room.status !== "active"} onClick={() => void command("skip")}><SkipForward size={18}/></button>
           <button className="draft-time-button" disabled={room.status !== "active"} onClick={() => void command("time", { seconds: 30 })}>+30s</button>
+          <button className="draft-time-button danger" disabled={busy} onClick={() => void command("reset")}>Reset</button>
         </div>}
       </header>
 
@@ -1565,7 +1627,7 @@ function DraftView({ league, accessToken }: { league: LeagueDetail; accessToken:
       </div></section>
 
       <div className="draft-workspace-grid">
-        <section className="draft-player-pool"><div className="section-heading"><div><p className="eyebrow">Available players</p><h2>Player board</h2></div><span>{players.filter((player) => !player.drafted).length} shown</span></div><FantasyProsAttribution updatedAt={players.find((player) => player.rankingUpdatedAt)?.rankingUpdatedAt}/><div className="draft-filters"><label><Search size={16}/><input placeholder="Search players" value={query} onChange={(event) => setQuery(event.target.value)}/></label><select aria-label="Filter position" value={position} onChange={(event) => setPosition(event.target.value)}><option value="">All positions</option>{["QB","RB","WR","TE","K","DST","DL","LB","DB"].map((item) => <option key={item}>{item}</option>)}</select></div><div className="draft-player-list">{players.map((player) => <div className={player.drafted ? "drafted" : ""} key={player.playerId}><b title={player.expertConsensusRank ? "FantasyPros Expert Consensus Rank" : "myFFL fallback order"}>{player.rank}</b><span><strong>{player.displayName}</strong><small>{player.positionRank ? `${player.positionRank} - ` : ""}{player.position} - {player.nflTeam ?? "FA"}{player.tier ? ` - Tier ${player.tier}` : ""}</small></span><button className="icon-button" title={player.queued ? "Remove from queue" : "Add to queue"} aria-label={player.queued ? `Remove ${player.displayName} from queue` : `Add ${player.displayName} to queue`} disabled={player.drafted} onClick={() => void saveQueue(player.queued ? queueIds.filter((id) => id !== player.playerId) : [...queueIds, player.playerId])}>{player.queued ? <X size={16}/> : <ListPlus size={16}/>}</button><button className="draft-player-button" disabled={player.drafted || (!room.canPick && !room.canManage) || room.status !== "active"} onClick={() => void makePick(player.playerId)}>Draft</button></div>)}</div></section>
+        <section className="draft-player-pool"><div className="section-heading"><div><p className="eyebrow">Available players</p><h2>Player board</h2></div><span>{players.filter((player) => !player.drafted).length} shown</span></div><FantasyProsAttribution updatedAt={players.find((player) => player.rankingUpdatedAt)?.rankingUpdatedAt}/><div className="draft-filters"><label><Search size={16}/><input placeholder="Search players" value={query} onChange={(event) => setQuery(event.target.value)}/></label><select aria-label="Filter position" value={position} onChange={(event) => setPosition(event.target.value)}><option value="">All positions</option>{["QB","RB","WR","TE","K","DST","DL","LB","DB"].map((item) => <option key={item}>{item}</option>)}</select></div><div className="draft-player-list">{players.map((player) => <div className={player.drafted ? "drafted" : ""} key={player.playerId}><b title={player.expertConsensusRank ? "FantasyPros Expert Consensus Rank" : "myFFL fallback order"}>{player.rank}</b><PlayerAvatar src={player.headshotUrl} name={player.displayName}/><span><strong>{player.displayName}</strong><small>{player.positionRank ? `${player.positionRank} - ` : ""}{player.position} - {player.nflTeam ?? "FA"}{player.byeWeek ? ` - Bye ${player.byeWeek}` : ""}{player.tier ? ` - Tier ${player.tier}` : ""}</small></span><button className="icon-button" title={player.queued ? "Remove from queue" : "Add to queue"} aria-label={player.queued ? `Remove ${player.displayName} from queue` : `Add ${player.displayName} to queue`} disabled={player.drafted} onClick={() => void saveQueue(player.queued ? queueIds.filter((id) => id !== player.playerId) : [...queueIds, player.playerId])}>{player.queued ? <X size={16}/> : <ListPlus size={16}/>}</button><button className="draft-player-button" disabled={player.drafted || (!room.canPick && !room.canManage) || room.status !== "active"} onClick={() => void makePick(player.playerId)}>Draft</button></div>)}</div></section>
         <aside className="draft-side-panel"><div className="section-heading"><div><p className="eyebrow">Autopick priority</p><h2>My queue</h2></div><ListChecks size={18}/></div>{room.queue.length ? <div className="draft-queue-list">{room.queue.map((player, index) => <div key={player.playerId}><b>{index + 1}</b><span>{player.displayName}<small>{player.position} {player.nflTeam}</small></span><button className="icon-button" aria-label={`Remove ${player.displayName}`} onClick={() => void saveQueue(queueIds.filter((id) => id !== player.playerId))}><X size={15}/></button></div>)}</div> : <p className="muted-empty">Add players from the board. The first legal, available player is selected on autopick.</p>}<div className="draft-roster-summary"><p className="eyebrow">Current rosters</p>{room.teams.map((team) => <div key={team.fantasyTeamId}><span>{team.teamName}</span><b>{room.picks.filter((pick) => pick.fantasyTeamId === team.fantasyTeamId && pick.status === "active").length}/{room.rounds}</b></div>)}</div></aside>
       </div>
     </div>
@@ -1897,6 +1959,7 @@ function SettingsView({
   onError,
   onChanged,
   onArchive,
+  onResetSeason,
 }: {
   league: LeagueDetail;
   accessToken: string;
@@ -1906,6 +1969,7 @@ function SettingsView({
   onError: (error: string) => void;
   onChanged: (league: LeagueDetail) => void;
   onArchive: () => void;
+  onResetSeason: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<UpdateLeagueSettingsRequest>(() => detailToSettings(league));
@@ -1968,6 +2032,14 @@ function SettingsView({
           <div><p className="eyebrow">League status</p><h2>{league.status === "archived" ? "Restore league" : "Archive league"}</h2><p>{league.status === "archived" ? "Return this league to active use." : "Archive hides active workflows while preserving every record."}</p></div>
           <button className={league.status === "archived" ? "outline-button" : "danger-button"} type="button" disabled={busy} onClick={onArchive}>
             {league.status === "archived" ? <RotateCcw size={18} /> : <Archive size={18} />} {league.status === "archived" ? "Restore" : "Archive"}
+          </button>
+        </section>
+      )}
+      {league.role === "commissioner" && (
+        <section className="danger-section">
+          <div><p className="eyebrow">Commissioner utility</p><h2>Reset season state</h2><p>Clears generated draft, roster, lineup, schedule, matchup, standings, transaction, waiver, trade, and activity data. Members, team names, invitations, scoring, roster settings, and schedule settings remain.</p></div>
+          <button className="danger-button" type="button" disabled={busy} onClick={onResetSeason}>
+            <RotateCcw size={18} /> Reset season
           </button>
         </section>
       )}

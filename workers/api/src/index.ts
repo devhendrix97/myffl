@@ -36,6 +36,7 @@ import { handleMatchupRequest } from "./matchups";
 import { handleCommunicationRequest } from "./communication";
 import { handleNotificationRequest, processNotificationQueue, type NotificationJob } from "./notifications";
 import { handleFantasyProsRequest, syncFantasyProsIfDue } from "./fantasypros";
+import { handleAssetRequest } from "./assets";
 export { LeagueRealtime, LiveNflEvent, MatchupRealtime } from "./realtime";
 
 export default {
@@ -136,7 +137,7 @@ async function routeRequest(
         service: "myffl-api",
         environment: env.ENVIRONMENT,
         status: "healthy",
-        version: "1.1.0",
+        version: "1.2.0",
         utc: new Date().toISOString(),
       } satisfies HealthResponse,
     };
@@ -144,6 +145,8 @@ async function routeRequest(
   if (request.method === "GET" && url.pathname === "/phase-status") {
     return { data: phaseStatus() };
   }
+  const assetResult = await handleAssetRequest(request, url, env);
+  if (assetResult) return assetResult;
   if (request.method === "GET" && url.pathname === "/auth/me") {
     return currentUser(request, env);
   }
@@ -188,6 +191,8 @@ async function routeRequest(
   if (realtimeResult) return realtimeResult;
   const gameFeedResult = await handleGameFeedRequest(request, url, env);
   if (gameFeedResult) return gameFeedResult;
+  const leagueResult = await handleLeagueRequest(request, url, env, ctx, correlationId);
+  if (leagueResult) return leagueResult;
   const scoringResult = await handleScoringRequest(request, url, env, ctx, correlationId);
   if (scoringResult) return scoringResult;
   const draftResult = await handleDraftRequest(request, url, env, ctx, correlationId);
@@ -204,8 +209,6 @@ async function routeRequest(
   if (notificationResult) return notificationResult;
   const fantasyProsResult = await handleFantasyProsRequest(request, url, env);
   if (fantasyProsResult) return fantasyProsResult;
-  const leagueResult = await handleLeagueRequest(request, url, env, ctx, correlationId);
-  if (leagueResult) return leagueResult;
   return undefined;
 }
 

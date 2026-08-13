@@ -5,11 +5,12 @@ import { getLeagueRow, requireLeagueRole } from "./league";
 import { getProviderRuntime } from "./game-feed";
 import { newId, type AccessTokenPrincipal } from "./security";
 import { rankingContext, rankingsForPlayers } from "./fantasypros";
+import { espnAthleteHeadshotUrl, providerAssetUrl } from "./assets";
 
 interface RosterRow { fantasy_roster_player_id: string; nfl_player_id: string; position: string; }
 interface AssignmentRow extends RosterRow { slot_type: string; slot_index: number; }
 interface SlotRow { slot_type: string; display_name: string; slot_count: number; eligible_positions_json: string; contributes_points: number; }
-interface ProfileRow { nfl_player_id: string; display_name: string; position: string | null; abbreviation: string | null; current_team_id: string | null; }
+interface ProfileRow { nfl_player_id: string; display_name: string; position: string | null; abbreviation: string | null; current_team_id: string | null; headshot_object_key: string | null; logo_object_key: string | null; }
 
 export async function handleTeamRequest(request: Request, url: URL, env: Env, correlationId: string): Promise<HandlerResult<unknown> | undefined> {
   const match = url.pathname.match(/^\/api\/leagues\/([^/]+)\/(team|players)(?:\/([^/]+))?$/);
@@ -79,7 +80,7 @@ async function getTeamLineup(principal: AccessTokenPrincipal, db: D1Database, le
       return {
         rosterPlayerId: row.fantasy_roster_player_id, playerId: row.nfl_player_id,
         displayName: profile?.display_name ?? "NFL player", position: row.position,
-        nflTeam: profile?.abbreviation ?? undefined, injuryStatus: injuries.get(row.nfl_player_id),
+        nflTeam: profile?.abbreviation ?? undefined, headshotUrl: espnAthleteHeadshotUrl(env, row.nfl_player_id, profile?.headshot_object_key), nflTeamLogoUrl: providerAssetUrl(env, profile?.logo_object_key), injuryStatus: injuries.get(row.nfl_player_id),
         slotType: row.slot_type, slotIndex: row.slot_index,
         eligibleSlots: [...(eligible.get(row.position) ?? []), "BENCH", "IR"].filter((value, index, array) => array.indexOf(value) === index),
         locked: Boolean(lock?.locked), locksAtUtc: lock?.startsAt,
@@ -93,35 +94,56 @@ async function getTeamLineup(principal: AccessTokenPrincipal, db: D1Database, le
 async function searchPlayers(principal: AccessTokenPrincipal, db: D1Database, seasonId: string, url: URL, env: Env): Promise<LeaguePlayerSearchItem[]> {
   const query = (url.searchParams.get("query") ?? "").trim().slice(0, 80);
   const position = (url.searchParams.get("position") ?? "").trim().toUpperCase().slice(0, 12);
+  const team = (url.searchParams.get("team") ?? "").trim().toUpperCase().slice(0, 8);
+  const availableOnly = url.searchParams.get("available") === "true";
   const watchedOnly = url.searchParams.get("watched") === "true";
-  const limit = Math.min(150, Math.max(1, Number(url.searchParams.get("limit") ?? 80) || 80));
-  const result = await env.NFL_DB.prepare(
-    `select players.nfl_player_id, players.display_name, players.position, teams.abbreviation, players.current_team_id
-     from nfl_players players left join nfl_teams teams on teams.nfl_team_id = players.current_team_id
-     where (?1 = '' or players.display_name like ?2) and (?3 = '' or players.position = ?3)
-     order by players.display_name limit ?4`,
-  ).bind(query, `%${query}%`, position, 900).all<ProfileRow>();
-  const allProfiles = result.results ?? [];
+  const sort = (url.searchParams.get("sort") ?? "rank").trim().toLowerCase();
+  const limit = Math.min(250, Math.max(1, Number(url.searchParams.get("limit") ?? 120) || 120));
   const league = await db.prepare("select league_id from league_seasons where league_season_id=?1").bind(seasonId).first<{ league_id: string }>();
   const ranking = await rankingContext(db, league?.league_id ?? "", seasonId);
+  const orderClause = sort === "rank"
+    ? "order by coalesce(rankings.overall_rank, 99999), players.display_name"
+    : "order by players.display_name";
+  const result = await env.NFL_DB.prepare(
+    `select players.nfl_player_id, players.display_name, players.position, teams.abbreviation, players.current_team_id,
+      players.headshot_object_key, teams.logo_object_key
+     from nfl_players players left join nfl_teams teams on teams.nfl_team_id = players.current_team_id
+     left join fantasypros_rankings rankings on rankings.nfl_player_id = players.nfl_player_id
+      and rankings.season_year = ?6 and rankings.scoring = ?7
+     where (?1 = '' or players.display_name like ?2) and (?3 = '' or players.position = ?3)
+       and (?4 = '' or teams.abbreviation = ?4)
+     ${orderClause} limit ?5`,
+  ).bind(query, `%${query}%`, position, team, 1200, ranking.seasonYear, ranking.scoring).all<ProfileRow>();
+  const allProfiles = result.results ?? [];
   const rankings = await rankingsForPlayers(env.NFL_DB, ranking.seasonYear, ranking.scoring, allProfiles.map((profile) => profile.nfl_player_id));
-  const profiles = allProfiles.sort((left, right) => (rankings.get(left.nfl_player_id)?.overallRank ?? 99999) - (rankings.get(right.nfl_player_id)?.overallRank ?? 99999) || left.display_name.localeCompare(right.display_name)).slice(0, limit);
-  if (!profiles.length) return [];
-  const ids = profiles.map((profile) => profile.nfl_player_id);
-  const placeholders = ids.map((_, index) => `?${index + 2}`).join(",");
+  if (!allProfiles.length) return [];
+  const ids = allProfiles.map((profile) => profile.nfl_player_id);
   const runtime = await getProviderRuntime(env);
   const [owners, watches, injuries] = await Promise.all([
-    db.prepare(`select roster.nfl_player_id, roster.fantasy_team_id, teams.team_name from fantasy_roster_players roster join fantasy_teams teams on teams.fantasy_team_id = roster.fantasy_team_id where roster.league_season_id = ?1 and roster.released_at_utc is null and roster.nfl_player_id in (${placeholders})`).bind(seasonId, ...ids).all<{ nfl_player_id: string; fantasy_team_id: string; team_name: string }>(),
-    db.prepare(`select nfl_player_id from player_watchlists where league_season_id = ?1 and user_id = ?2 and nfl_player_id in (${ids.map((_, index) => `?${index + 3}`).join(",")})`).bind(seasonId, principal.userId, ...ids).all<{ nfl_player_id: string }>(),
+    loadOwners(db, seasonId, ids),
+    loadWatches(db, seasonId, principal.userId, ids),
     loadInjuries(env.NFL_DB, ids, runtime.dataScope),
   ]);
-  const ownerMap = new Map((owners.results ?? []).map((owner) => [owner.nfl_player_id, owner]));
-  const watched = new Set((watches.results ?? []).map((row) => row.nfl_player_id));
-  return profiles.filter((profile) => !watchedOnly || watched.has(profile.nfl_player_id)).map((profile) => {
+  const ownerMap = new Map(owners.map((owner) => [owner.nfl_player_id, owner]));
+  const watched = new Set(watches);
+  const profiles = allProfiles
+    .filter((profile) => !watchedOnly || watched.has(profile.nfl_player_id))
+    .filter((profile) => !availableOnly || !ownerMap.has(profile.nfl_player_id))
+    .sort((left, right) => comparePlayers(left, right, sort, rankings))
+    .slice(0, limit);
+  return profiles.map((profile) => {
     const owner = ownerMap.get(profile.nfl_player_id);
     const expert = rankings.get(profile.nfl_player_id);
-    return { playerId: profile.nfl_player_id, displayName: profile.display_name, position: profile.position ?? "UNK", nflTeam: profile.abbreviation ?? undefined, injuryStatus: injuries.get(profile.nfl_player_id), rosteredByTeamId: owner?.fantasy_team_id, rosteredByTeamName: owner?.team_name, watched: watched.has(profile.nfl_player_id), expertConsensusRank: expert?.overallRank, positionRank: expert?.positionRank, tier: expert?.tier, rankingUpdatedAt: expert?.sourceUpdatedAt ?? expert?.fetchedAtUtc };
+    return { playerId: profile.nfl_player_id, displayName: profile.display_name, position: profile.position ?? "UNK", nflTeam: profile.abbreviation ?? undefined, headshotUrl: espnAthleteHeadshotUrl(env, profile.nfl_player_id, profile.headshot_object_key), nflTeamLogoUrl: providerAssetUrl(env, profile.logo_object_key), injuryStatus: injuries.get(profile.nfl_player_id), rosteredByTeamId: owner?.fantasy_team_id, rosteredByTeamName: owner?.team_name, watched: watched.has(profile.nfl_player_id), expertConsensusRank: expert?.overallRank, positionRank: expert?.positionRank, tier: expert?.tier, byeWeek: expert?.byeWeek, rankingUpdatedAt: expert?.sourceUpdatedAt ?? expert?.fetchedAtUtc };
   });
+}
+
+function comparePlayers(left: ProfileRow, right: ProfileRow, sort: string, rankings: Map<string, { overallRank?: number }>): number {
+  if (sort === "name-desc") return right.display_name.localeCompare(left.display_name);
+  if (sort === "team") return (left.abbreviation ?? "ZZZ").localeCompare(right.abbreviation ?? "ZZZ") || left.display_name.localeCompare(right.display_name);
+  if (sort === "position") return (left.position ?? "ZZZ").localeCompare(right.position ?? "ZZZ") || (rankings.get(left.nfl_player_id)?.overallRank ?? 99999) - (rankings.get(right.nfl_player_id)?.overallRank ?? 99999) || left.display_name.localeCompare(right.display_name);
+  if (sort === "rank") return (rankings.get(left.nfl_player_id)?.overallRank ?? 99999) - (rankings.get(right.nfl_player_id)?.overallRank ?? 99999) || left.display_name.localeCompare(right.display_name);
+  return left.display_name.localeCompare(right.display_name);
 }
 
 async function loadFantasyPoints(db: D1Database, nflDb: D1Database, seasonId: string, playerIds: string[], week: number, dataScope: string): Promise<Map<string, number>> {
@@ -261,16 +283,25 @@ async function saveLineup(principal: AccessTokenPrincipal, db: D1Database, leagu
 }
 
 async function getPlayerProfile(principal: AccessTokenPrincipal, db: D1Database, _leagueId: string, seasonId: string, playerId: string, env: Env): Promise<PlayerProfileResponse> {
-  const profile = await env.NFL_DB.prepare("select players.nfl_player_id, players.display_name, players.position, teams.abbreviation, players.current_team_id from nfl_players players left join nfl_teams teams on teams.nfl_team_id = players.current_team_id where players.nfl_player_id = ?1").bind(playerId).first<ProfileRow>();
+  const profile = await env.NFL_DB.prepare("select players.nfl_player_id, players.display_name, players.position, teams.abbreviation, players.current_team_id, players.headshot_object_key, teams.logo_object_key from nfl_players players left join nfl_teams teams on teams.nfl_team_id = players.current_team_id where players.nfl_player_id = ?1").bind(playerId).first<ProfileRow>();
   if (!profile) throw new ApiException(404, "player_not_found", "Player not found.");
   const runtime = await getProviderRuntime(env);
-  const [owner, watched, games, injury] = await Promise.all([
+  const [owner, ownTeam, watched, games, yearlyGames, injury, draft] = await Promise.all([
     db.prepare("select roster.fantasy_team_id, teams.team_name from fantasy_roster_players roster join fantasy_teams teams on teams.fantasy_team_id = roster.fantasy_team_id where roster.league_season_id = ?1 and roster.nfl_player_id = ?2 and roster.released_at_utc is null").bind(seasonId, playerId).first<{ fantasy_team_id: string; team_name: string }>(),
+    db.prepare("select fantasy_team_id from fantasy_teams where league_season_id = ?1 and manager_user_id = ?2").bind(seasonId, principal.userId).first<{ fantasy_team_id: string }>(),
     db.prepare("select 1 as watched from player_watchlists where league_season_id = ?1 and user_id = ?2 and nfl_player_id = ?3").bind(seasonId, principal.userId, playerId).first(),
     env.NFL_DB.prepare("select nfl_event_id, stats_json from nfl_player_game_stats where nfl_player_id = ?1 and data_scope = ?2 order by source_updated_at_utc desc limit 8").bind(playerId, runtime.dataScope).all<{ nfl_event_id: string; stats_json: string }>(),
+    env.NFL_DB.prepare("select events.season_year, stats.stats_json from nfl_player_game_stats stats join nfl_events events on events.nfl_event_id = stats.nfl_event_id where stats.nfl_player_id = ?1 and stats.data_scope = ?2 order by events.season_year desc").bind(playerId, runtime.dataScope).all<{ season_year: number; stats_json: string }>(),
     env.NFL_DB.prepare("select status from nfl_player_injuries where nfl_player_id = ?1 and data_scope = ?2 order by updated_at_utc desc limit 1").bind(playerId, runtime.dataScope).first<{ status: string | null }>(),
+    db.prepare("select status from drafts where league_season_id = ?1").bind(seasonId).first<{ status: string }>(),
   ]);
-  return { playerId, displayName: profile.display_name, position: profile.position ?? "UNK", nflTeam: profile.abbreviation ?? undefined, injuryStatus: injury?.status ?? undefined, rosteredByTeamId: owner?.fantasy_team_id, rosteredByTeamName: owner?.team_name, watched: Boolean(watched), recentGames: (games.results ?? []).map((game) => ({ eventId: game.nfl_event_id, stats: parseObject(game.stats_json) })) };
+  const isMine = Boolean(owner && ownTeam?.fantasy_team_id === owner.fantasy_team_id);
+  const actions: PlayerProfileResponse["availableActions"] = ["watch"];
+  if (!owner) actions.push("add", "claim");
+  else if (isMine) actions.push("trade-away");
+  else actions.push("trade-for");
+  if (!draft || ["setup", "scheduled", "active", "paused"].includes(draft.status)) actions.push("draft-queue");
+  return { playerId, displayName: profile.display_name, position: profile.position ?? "UNK", nflTeam: profile.abbreviation ?? undefined, headshotUrl: espnAthleteHeadshotUrl(env, profile.nfl_player_id, profile.headshot_object_key), nflTeamLogoUrl: providerAssetUrl(env, profile.logo_object_key), injuryStatus: injury?.status ?? undefined, rosteredByTeamId: owner?.fantasy_team_id, rosteredByTeamName: owner?.team_name, watched: Boolean(watched), availableActions: actions, yearlyStats: yearlyStats(yearlyGames.results ?? []), recentGames: (games.results ?? []).map((game) => ({ eventId: game.nfl_event_id, stats: parseObject(game.stats_json) })) };
 }
 
 async function setWatched(db: D1Database, seasonId: string, userId: string, playerId: string, watched: boolean): Promise<void> { if (watched) await db.prepare("insert into player_watchlists (player_watchlist_id, league_season_id, user_id, nfl_player_id, created_at_utc) values (?1, ?2, ?3, ?4, ?5) on conflict(league_season_id, user_id, nfl_player_id) do nothing").bind(newId("pwl"), seasonId, userId, playerId, new Date().toISOString()).run(); else await db.prepare("delete from player_watchlists where league_season_id = ?1 and user_id = ?2 and nfl_player_id = ?3").bind(seasonId, userId, playerId).run(); }
@@ -278,8 +309,48 @@ async function requireManagedTeam(db: D1Database, seasonId: string, userId: stri
 async function loadSlots(db: D1Database, seasonId: string): Promise<SlotRow[]> { const result = await db.prepare(`select slots.slot_type, slots.display_name, slots.slot_count, slots.eligible_positions_json, slots.contributes_points from roster_slots slots join roster_definitions definitions on definitions.roster_definition_id = slots.roster_definition_id where definitions.league_season_id = ?1 order by slots.display_order`).bind(seasonId).all<SlotRow>(); return result.results ?? []; }
 export function expandSlots(rows: SlotRow[]): Array<{ slotType: string; slotIndex: number; displayName: string; eligiblePositions: string[]; contributesPoints: boolean }> { return rows.flatMap((row) => Array.from({ length: row.slot_count }, (_, index) => ({ slotType: row.slot_type, slotIndex: index + 1, displayName: row.display_name, eligiblePositions: JSON.parse(row.eligible_positions_json) as string[], contributesPoints: Boolean(row.contributes_points) }))); }
 function slotEligibility(rows: SlotRow[]): Map<string, string[]> { const result = new Map<string, string[]>(); for (const row of rows) for (const position of JSON.parse(row.eligible_positions_json) as string[]) result.set(position, [...(result.get(position) ?? []), row.slot_type]); return result; }
-async function loadProfiles(db: D1Database, ids: string[]): Promise<Map<string, ProfileRow>> { if (!ids.length) return new Map(); const placeholders = ids.map((_, index) => `?${index + 1}`).join(","); const result = await db.prepare(`select players.nfl_player_id, players.display_name, players.position, teams.abbreviation, players.current_team_id from nfl_players players left join nfl_teams teams on teams.nfl_team_id = players.current_team_id where players.nfl_player_id in (${placeholders})`).bind(...ids).all<ProfileRow>(); return new Map((result.results ?? []).map((row) => [row.nfl_player_id, row])); }
-async function loadInjuries(db: D1Database, ids: string[], dataScope: string): Promise<Map<string, string>> { if (!ids.length) return new Map(); const placeholders = ids.map((_, index) => `?${index + 2}`).join(","); const result = await db.prepare(`select nfl_player_id, status from nfl_player_injuries where data_scope = ?1 and nfl_player_id in (${placeholders}) order by updated_at_utc desc`).bind(dataScope, ...ids).all<{ nfl_player_id: string; status: string | null }>(); const map = new Map<string, string>(); for (const row of result.results ?? []) if (row.status && !map.has(row.nfl_player_id)) map.set(row.nfl_player_id, row.status); return map; }
+async function loadProfiles(db: D1Database, ids: string[]): Promise<Map<string, ProfileRow>> { if (!ids.length) return new Map(); const placeholders = ids.map((_, index) => `?${index + 1}`).join(","); const result = await db.prepare(`select players.nfl_player_id, players.display_name, players.position, teams.abbreviation, players.current_team_id, players.headshot_object_key, teams.logo_object_key from nfl_players players left join nfl_teams teams on teams.nfl_team_id = players.current_team_id where players.nfl_player_id in (${placeholders})`).bind(...ids).all<ProfileRow>(); return new Map((result.results ?? []).map((row) => [row.nfl_player_id, row])); }
+async function loadOwners(db: D1Database, seasonId: string, ids: string[]): Promise<Array<{ nfl_player_id: string; fantasy_team_id: string; team_name: string }>> {
+  const rows: Array<{ nfl_player_id: string; fantasy_team_id: string; team_name: string }> = [];
+  for (const chunk of chunks(ids, 75)) {
+    const placeholders = chunk.map((_, index) => `?${index + 2}`).join(",");
+    const result = await db.prepare(`select roster.nfl_player_id, roster.fantasy_team_id, teams.team_name from fantasy_roster_players roster join fantasy_teams teams on teams.fantasy_team_id = roster.fantasy_team_id where roster.league_season_id = ?1 and roster.released_at_utc is null and roster.nfl_player_id in (${placeholders})`).bind(seasonId, ...chunk).all<{ nfl_player_id: string; fantasy_team_id: string; team_name: string }>();
+    rows.push(...(result.results ?? []));
+  }
+  return rows;
+}
+async function loadWatches(db: D1Database, seasonId: string, userId: string, ids: string[]): Promise<string[]> {
+  const rows: string[] = [];
+  for (const chunk of chunks(ids, 75)) {
+    const placeholders = chunk.map((_, index) => `?${index + 3}`).join(",");
+    const result = await db.prepare(`select nfl_player_id from player_watchlists where league_season_id = ?1 and user_id = ?2 and nfl_player_id in (${placeholders})`).bind(seasonId, userId, ...chunk).all<{ nfl_player_id: string }>();
+    rows.push(...(result.results ?? []).map((row) => row.nfl_player_id));
+  }
+  return rows;
+}
+async function loadInjuries(db: D1Database, ids: string[], dataScope: string): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  for (const chunk of chunks(ids, 75)) {
+    const placeholders = chunk.map((_, index) => `?${index + 2}`).join(",");
+    const result = await db.prepare(`select nfl_player_id, status from nfl_player_injuries where data_scope = ?1 and nfl_player_id in (${placeholders}) order by updated_at_utc desc`).bind(dataScope, ...chunk).all<{ nfl_player_id: string; status: string | null }>();
+    for (const row of result.results ?? []) if (row.status && !map.has(row.nfl_player_id)) map.set(row.nfl_player_id, row.status);
+  }
+  return map;
+}
 async function loadLocks(db: D1Database, ids: string[], week: number, dataScope: string): Promise<Map<string, { locked: boolean; startsAt: string }>> { if (!ids.length) return new Map(); const placeholders = ids.map((_, index) => `?${index + 3}`).join(","); const result = await db.prepare(`select players.nfl_player_id, events.starts_at_utc, snapshots.status from nfl_players players join nfl_events events on events.week = ?1 and events.season_year = (select max(season_year) from nfl_events) join nfl_event_snapshots snapshots on snapshots.nfl_event_id = events.nfl_event_id and snapshots.data_scope = ?2 where players.nfl_player_id in (${placeholders}) and players.current_team_id in (snapshots.home_team_id, snapshots.away_team_id) order by events.starts_at_utc`).bind(week, dataScope, ...ids).all<{ nfl_player_id: string; starts_at_utc: string; status: string }>(); const map = new Map<string, { locked: boolean; startsAt: string }>(); for (const row of result.results ?? []) if (!map.has(row.nfl_player_id)) map.set(row.nfl_player_id, { locked: row.status !== "pre" || (dataScope === "production" && Date.parse(row.starts_at_utc) <= Date.now()), startsAt: row.starts_at_utc }); return map; }
 function requireWeek(value: unknown): number { const week = Number(value ?? 1); if (!Number.isInteger(week) || week < 1 || week > 22) throw new ApiException(400, "invalid_week", "Week must be between 1 and 22."); return week; }
 function parseObject(value: string): Record<string, unknown> { try { const parsed: unknown = JSON.parse(value); return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}; } catch { return {}; } }
+function yearlyStats(rows: Array<{ season_year: number; stats_json: string }>): PlayerProfileResponse["yearlyStats"] {
+  const bySeason = new Map<number, { games: number; totals: Record<string, number> }>();
+  for (const row of rows) {
+    const bucket = bySeason.get(row.season_year) ?? { games: 0, totals: {} };
+    bucket.games++;
+    for (const [key, value] of Object.entries(parseObject(row.stats_json))) {
+      const number = Array.isArray(value) ? Number(value[0]) : Number(value);
+      if (Number.isFinite(number)) bucket.totals[key] = (bucket.totals[key] ?? 0) + number;
+    }
+    bySeason.set(row.season_year, bucket);
+  }
+  return [...bySeason.entries()].sort((a, b) => b[0] - a[0]).map(([seasonYear, value]) => ({ seasonYear, games: value.games, stats: value.totals }));
+}
+function chunks<T>(values: T[], size: number): T[][] { const result: T[][] = []; for (let index = 0; index < values.length; index += size) result.push(values.slice(index, index + size)); return result; }

@@ -1,6 +1,7 @@
 import { authenticate, type HandlerResult } from "./auth";
-import { ApiException } from "./http";
+import { ApiException, readJson } from "./http";
 import { requireLeagueRole } from "./league";
+import { resolveFantasyProsApiKey } from "./provider-credentials";
 
 const SOURCE_NAME = "FantasyPros Expert Consensus Rankings";
 const SOURCE_URL = "https://www.fantasypros.com/nfl/rankings/consensus-cheatsheets.php";
@@ -16,6 +17,7 @@ export interface FantasyProsRanking {
   overallRank: number;
   positionRank?: string;
   tier?: number;
+  byeWeek?: number;
   sourceUpdatedAt?: string;
   fetchedAtUtc: string;
 }
@@ -53,6 +55,9 @@ export async function handleFantasyProsRequest(
   url: URL,
   env: Env,
 ): Promise<HandlerResult<unknown> | undefined> {
+  if (url.pathname === "/api/internal/fantasypros/csv" && request.method === "POST") {
+    return importFantasyProsCsvFromInternalRequest(request, env);
+  }
   const match = url.pathname.match(/^\/api\/leagues\/([^/]+)\/rankings$/);
   if (!match || request.method !== "GET") return undefined;
   const principal = await authenticate(request, env);
@@ -61,7 +66,7 @@ export async function handleFantasyProsRequest(
   const rows = await env.NFL_DB.prepare(
     `select nfl_player_id as playerId,display_name as displayName,team_abbreviation as nflTeam,
       position,overall_rank as overallRank,position_rank as positionRank,tier,
-      source_updated_at as sourceUpdatedAt,fetched_at_utc as fetchedAtUtc
+      bye_week as byeWeek,source_updated_at as sourceUpdatedAt,fetched_at_utc as fetchedAtUtc
      from fantasypros_rankings
      where season_year=?1 and scoring=?2 and nfl_player_id is not null
      order by overall_rank limit 500`,
@@ -79,38 +84,104 @@ export async function handleFantasyProsRequest(
 }
 
 export async function syncFantasyProsIfDue(env: Env, now = new Date()): Promise<void> {
-  if (String(env.FANTASYPROS_SYNC_ENABLED) !== "true" || !env.FANTASYPROS_API_KEY) return;
-  if (![10, 14, 18].includes(now.getUTCHours()) || now.getUTCMinutes() !== 10) return;
+  if (![10, 14, 18].includes(now.getUTCHours()) || now.getUTCMinutes() !== 10) {
+    const season = now.getUTCFullYear();
+    const existing = await env.NFL_DB.prepare(
+      "select 1 from fantasypros_rankings where season_year=?1 and nfl_player_id is not null limit 1",
+    ).bind(season).first();
+    const usage = await fantasyProsRequestUsage(env, now);
+    if (existing || usage.requestsUsed > 0) return;
+  }
+  await syncFantasyProsNow(env, now);
+}
+
+export async function syncFantasyProsNow(env: Env, now = new Date()): Promise<void> {
+  const apiKey = await resolveFantasyProsApiKey(env);
+  if (!apiKey) return;
   const season = now.getUTCFullYear();
   const scopes: Array<{ scoring: RankingScoring; position: "ALL" | "IDP"; copyTo?: readonly RankingScoring[] }> = [
     ...SCORING.map((scoring) => ({ scoring, position: "ALL" as const })),
     { scoring: "STD", position: "IDP", copyTo: SCORING },
   ];
+  const failures: string[] = [];
   for (const scope of scopes) {
-    try { await syncScope(env, season, scope.scoring, scope.position, now, scope.copyTo); }
-    catch (error) { console.error(JSON.stringify({ level: "error", event: "fantasypros_sync_failed", scoring: scope.scoring, position: scope.position, error: error instanceof Error ? error.message : String(error) })); }
+    try { await syncScope(env, apiKey, season, scope.scoring, scope.position, now, scope.copyTo); }
+    catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push(`${scope.scoring}/${scope.position}: ${message}`);
+      console.error(JSON.stringify({ level: "error", event: "fantasypros_sync_failed", scoring: scope.scoring, position: scope.position, error: message }));
+    }
   }
+  if (failures.length === scopes.length) {
+    throw new ApiException(502, "fantasypros_sync_failed", failures[0] ?? "FantasyPros sync failed.");
+  }
+}
+
+export async function validateFantasyProsApiKey(env: Env, apiKey: string, now = new Date()): Promise<{ validatedAtUtc: string; playersSeen: number }> {
+  const value = apiKey.trim();
+  if (value.length < 16) throw new ApiException(400, "invalid_provider_key", "Enter a valid FantasyPros API key.");
+  const requestDate = now.toISOString().slice(0, 10);
+  await reserveFantasyProsRequest(env.NFL_DB, requestDate, now);
+  const runId = crypto.randomUUID();
+  const started = now.toISOString();
+  await env.NFL_DB.prepare(
+    `insert into fantasypros_sync_runs
+      (fantasypros_sync_run_id,request_date,season_year,scoring,position_scope,status,started_at_utc)
+     values(?1,?2,?3,'PPR','VALIDATION','started',?4)`,
+  ).bind(runId, requestDate, now.getUTCFullYear(), started).run();
+  try {
+    const endpoint = `${API_BASE}/nfl/${now.getUTCFullYear()}/consensus-rankings?position=ALL&scoring=PPR&week=0`;
+    const response = await fetch(endpoint, {
+      headers: { accept: "application/json", "x-api-key": value },
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!response.ok) {
+      const message = response.status === 401 || response.status === 403
+        ? "FantasyPros rejected the API key."
+        : `FantasyPros validation returned ${response.status}.`;
+      throw new ApiException(response.status === 401 || response.status === 403 ? 400 : 502, "provider_key_validation_failed", message);
+    }
+    const payload = await response.json() as FantasyProsPayload;
+    const players = Array.isArray(payload.players) ? payload.players.length : 0;
+    if (!players) throw new ApiException(502, "provider_key_validation_failed", "FantasyPros returned no ranking players.");
+    const validatedAtUtc = new Date().toISOString();
+    await env.NFL_DB.prepare(
+      "update fantasypros_sync_runs set status='succeeded',records_seen=?2,completed_at_utc=?3 where fantasypros_sync_run_id=?1",
+    ).bind(runId, players, validatedAtUtc).run();
+    return { validatedAtUtc, playersSeen: players };
+  } catch (error) {
+    await env.NFL_DB.prepare(
+      "update fantasypros_sync_runs set status='failed',error_message=?2,completed_at_utc=?3 where fantasypros_sync_run_id=?1",
+    ).bind(runId, error instanceof Error ? error.message.slice(0, 500) : "FantasyPros validation failed.", new Date().toISOString()).run();
+    throw error;
+  }
+}
+
+export async function fantasyProsRequestUsage(env: Env, now = new Date()): Promise<{ requestDate: string; requestsUsed: number; requestLimit: number; requestsRemaining: number }> {
+  const requestDate = now.toISOString().slice(0, 10);
+  const [budget, ledger] = await Promise.all([
+    env.NFL_DB.prepare("select attempts from fantasypros_daily_budgets where request_date=?1").bind(requestDate).first<{ attempts: number }>(),
+    env.NFL_DB.prepare("select count(*) as count from fantasypros_sync_runs where request_date=?1").bind(requestDate).first<{ count: number }>(),
+  ]);
+  const requestsUsed = Math.max(budget?.attempts ?? 0, ledger?.count ?? 0);
+  return { requestDate, requestsUsed, requestLimit: DAILY_REQUEST_BUDGET, requestsRemaining: Math.max(0, DAILY_REQUEST_BUDGET - requestsUsed) };
 }
 
 async function syncScope(
   env: Env,
+  apiKey: string,
   season: number,
   scoring: RankingScoring,
   position: "ALL" | "IDP",
   now: Date,
   copyTo: readonly RankingScoring[] = [scoring],
 ): Promise<void> {
-  const apiKey = env.FANTASYPROS_API_KEY;
-  if (!apiKey) return;
   const requestDate = now.toISOString().slice(0, 10);
-  const [daily, latest] = await Promise.all([
-    env.NFL_DB.prepare("select count(*) as count from fantasypros_sync_runs where request_date=?1").bind(requestDate).first<{ count: number }>(),
-    env.NFL_DB.prepare(
-      "select completed_at_utc from fantasypros_sync_runs where season_year=?1 and scoring=?2 and position_scope=?3 and status='succeeded' order by completed_at_utc desc limit 1",
-    ).bind(season, scoring, position).first<{ completed_at_utc: string }>(),
-  ]);
-  if ((daily?.count ?? 0) >= DAILY_REQUEST_BUDGET) throw new Error("FantasyPros daily request circuit breaker is open.");
+  const latest = await env.NFL_DB.prepare(
+    "select completed_at_utc from fantasypros_sync_runs where season_year=?1 and scoring=?2 and position_scope=?3 and status='succeeded' order by completed_at_utc desc limit 1",
+  ).bind(season, scoring, position).first<{ completed_at_utc: string }>();
   if (latest && now.getTime() - Date.parse(latest.completed_at_utc) < SNAPSHOT_FRESH_HOURS * 3_600_000) return;
+  await reserveFantasyProsRequest(env.NFL_DB, requestDate, now);
 
   const runId = crypto.randomUUID();
   const started = now.toISOString();
@@ -139,21 +210,21 @@ async function syncScope(
           `insert into fantasypros_rankings
             (season_year,scoring,fantasypros_player_id,nfl_player_id,display_name,team_abbreviation,position,
              overall_rank,position_rank,tier,rank_min,rank_max,rank_average,rank_std_dev,player_page_url,
-             source_updated_at,fetched_at_utc)
-           values(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
+             bye_week,source_scope,source_updated_at,fetched_at_utc)
+           values(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
            on conflict(season_year,scoring,fantasypros_player_id) do update set
              nfl_player_id=excluded.nfl_player_id,display_name=excluded.display_name,
              team_abbreviation=excluded.team_abbreviation,position=excluded.position,
              overall_rank=excluded.overall_rank,position_rank=excluded.position_rank,tier=excluded.tier,
              rank_min=excluded.rank_min,rank_max=excluded.rank_max,rank_average=excluded.rank_average,
-             rank_std_dev=excluded.rank_std_dev,player_page_url=excluded.player_page_url,
-             source_updated_at=excluded.source_updated_at,fetched_at_utc=excluded.fetched_at_utc`,
+             rank_std_dev=excluded.rank_std_dev,player_page_url=excluded.player_page_url,bye_week=excluded.bye_week,
+             source_updated_at=excluded.source_updated_at,fetched_at_utc=excluded.fetched_at_utc,source_scope=excluded.source_scope`,
         ).bind(
           season, targetScoring, String(source.player_id), nflPlayerId, source.player_name,
           source.player_team_id ?? null, primaryPosition(source), integer(source.rank_ecr, 9999),
           source.pos_rank ?? null, nullableInteger(source.tier), nullableInteger(source.rank_min),
           nullableInteger(source.rank_max), nullableNumber(source.rank_ave), nullableNumber(source.rank_std),
-          source.player_page_url ?? null, payload.last_updated ?? null, fetchedAt,
+          source.player_page_url ?? null, null, "API", payload.last_updated ?? null, fetchedAt,
         )));
       }
       const positionClause = position === "ALL"
@@ -161,7 +232,7 @@ async function syncScope(
         : "position in ('DL','LB','DB','IDP')";
       await env.NFL_DB.prepare(
         `delete from fantasypros_rankings
-         where season_year=?1 and scoring=?2 and ${positionClause} and fetched_at_utc<>?3`,
+         where season_year=?1 and scoring=?2 and ${positionClause} and fetched_at_utc<>?3 and source_scope='API'`,
       ).bind(season, targetScoring, fetchedAt).run();
     }
 
@@ -179,6 +250,18 @@ async function syncScope(
       "update fantasypros_sync_runs set status='failed',error_message=?2,completed_at_utc=?3 where fantasypros_sync_run_id=?1",
     ).bind(runId, error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500), new Date().toISOString()).run();
     throw error;
+  }
+}
+
+async function reserveFantasyProsRequest(db: D1Database, requestDate: string, now: Date): Promise<void> {
+  const reservation = await db.prepare(
+    `insert into fantasypros_daily_budgets(request_date,attempts,updated_at_utc)
+     select ?1,min(?2,count(*)+1),?3 from fantasypros_sync_runs where request_date=?1
+     on conflict(request_date) do update set attempts=attempts+1,updated_at_utc=excluded.updated_at_utc
+     where attempts<?2 returning attempts`,
+  ).bind(requestDate, DAILY_REQUEST_BUDGET, now.toISOString()).first<{ attempts: number }>();
+  if (!reservation) {
+    throw new ApiException(429, "provider_daily_budget_reached", "The FantasyPros daily request budget is exhausted. Try again tomorrow.");
   }
 }
 
@@ -213,12 +296,87 @@ export async function rankingsForPlayers(
     const placeholders = chunk.map((_, index) => `?${index + 3}`).join(",");
     const rows = await db.prepare(
       `select nfl_player_id as playerId,overall_rank as overallRank,position_rank as positionRank,tier,
-        source_updated_at as sourceUpdatedAt,fetched_at_utc as fetchedAtUtc
+        bye_week as byeWeek,source_updated_at as sourceUpdatedAt,fetched_at_utc as fetchedAtUtc
        from fantasypros_rankings where season_year=?1 and scoring=?2 and nfl_player_id in (${placeholders})`,
     ).bind(seasonYear, scoring, ...chunk).all<FantasyProsRanking>();
     for (const row of rows.results ?? []) rankings.set(row.playerId, row);
   }
   return rankings;
+}
+
+export async function importFantasyProsCsv(
+  env: Env,
+  csvText: string,
+  options: { seasonYear: number; scoring: RankingScoring; scope?: string; sourceUpdatedAt?: string },
+): Promise<{ imported: number; mapped: number; scope: string; scoring: RankingScoring; seasonYear: number }> {
+  const rows = parseCsv(csvText);
+  const internal = await loadInternalPlayers(env.NFL_DB);
+  const fetchedAt = new Date().toISOString();
+  const scope = (options.scope || inferCsvScope(rows) || "CSV").toUpperCase();
+  const players = csvRowsToFantasyProsPlayers(rows, scope);
+  const mapped = mapPlayers(players, internal);
+  let imported = 0;
+  for (let index = 0; index < mapped.length; index += 75) {
+    const chunk = mapped.slice(index, index + 75);
+    if (!chunk.length) continue;
+    await env.NFL_DB.batch(chunk.map(({ source, nflPlayerId }) => env.NFL_DB.prepare(
+      `insert into fantasypros_rankings
+        (season_year,scoring,fantasypros_player_id,nfl_player_id,display_name,team_abbreviation,position,
+         overall_rank,position_rank,tier,rank_min,rank_max,rank_average,rank_std_dev,player_page_url,
+         bye_week,source_scope,source_updated_at,fetched_at_utc)
+       values(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
+       on conflict(season_year,scoring,fantasypros_player_id) do update set
+         nfl_player_id=excluded.nfl_player_id,display_name=excluded.display_name,
+         team_abbreviation=excluded.team_abbreviation,position=excluded.position,
+         overall_rank=excluded.overall_rank,position_rank=excluded.position_rank,tier=excluded.tier,
+         rank_min=excluded.rank_min,rank_max=excluded.rank_max,rank_average=excluded.rank_average,
+         rank_std_dev=excluded.rank_std_dev,player_page_url=excluded.player_page_url,
+         bye_week=excluded.bye_week,source_scope=excluded.source_scope,
+         source_updated_at=excluded.source_updated_at,fetched_at_utc=excluded.fetched_at_utc`,
+    ).bind(
+      options.seasonYear, options.scoring, String(source.player_id), nflPlayerId, source.player_name,
+      source.player_team_id ?? null, primaryPosition(source), integer(source.rank_ecr, 9999),
+      source.pos_rank ?? null, nullableInteger(source.tier), nullableInteger(source.rank_min),
+      nullableInteger(source.rank_max), nullableNumber(source.rank_ave), nullableNumber(source.rank_std),
+      source.player_page_url ?? null, nullableInteger((source as FantasyProsPlayer & { bye_week?: number }).bye_week),
+      scope, options.sourceUpdatedAt ?? null, fetchedAt,
+    )));
+    imported += chunk.length;
+  }
+  await env.NFL_DB.prepare(
+    `delete from fantasypros_rankings
+     where season_year=?1 and scoring=?2 and source_scope=?3 and fetched_at_utc<>?4`,
+  ).bind(options.seasonYear, options.scoring, scope, fetchedAt).run();
+  return { imported, mapped: mapped.filter((item) => item.nflPlayerId).length, scope, scoring: options.scoring, seasonYear: options.seasonYear };
+}
+
+async function importFantasyProsCsvFromInternalRequest(request: Request, env: Env): Promise<HandlerResult<unknown>> {
+  requireCsvImportToken(request, env);
+  const body = await readJson<{ csv?: string; seasonYear?: number; scoring?: RankingScoring; scope?: string; sourceUpdatedAt?: string }>(request);
+  const csv = body.csv?.trim();
+  if (!csv) throw new ApiException(400, "csv_required", "FantasyPros CSV content is required.");
+  const seasonYear = Number(body.seasonYear ?? new Date().getUTCFullYear());
+  if (!Number.isInteger(seasonYear) || seasonYear < 2020 || seasonYear > 2100) {
+    throw new ApiException(400, "invalid_season_year", "Choose a valid FantasyPros season year.");
+  }
+  const scoring = body.scoring && SCORING.includes(body.scoring) ? body.scoring : "PPR";
+  const result = await importFantasyProsCsv(env, csv, {
+    seasonYear,
+    scoring,
+    scope: body.scope,
+    sourceUpdatedAt: body.sourceUpdatedAt,
+  });
+  return { status: 201, data: { ...result, sourceName: SOURCE_NAME, importedAtUtc: new Date().toISOString() } };
+}
+
+function requireCsvImportToken(request: Request, env: Env): void {
+  const expected = env.FANTASYPROS_CSV_IMPORT_TOKEN?.trim();
+  if (!expected) throw new ApiException(503, "csv_import_not_configured", "FantasyPros CSV automation is not configured.");
+  const header = request.headers.get("authorization") ?? "";
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  if (!match || match[1].trim() !== expected) {
+    throw new ApiException(403, "csv_import_forbidden", "FantasyPros CSV automation token is invalid.");
+  }
 }
 
 export function scoringFromReceptionPoints(pointsMilli: number): RankingScoring {
@@ -260,6 +418,77 @@ function normalizeName(value: string): string {
 
 function primaryPosition(player: FantasyProsPlayer): string {
   return String(player.player_position_id ?? player.player_positions ?? "UNK").split(",")[0].trim().toUpperCase();
+}
+
+function csvRowsToFantasyProsPlayers(rows: Array<Record<string, string>>, fallbackScope: string): Array<FantasyProsPlayer & { bye_week?: number }> {
+  return rows.map((row, index) => {
+    const rank = pick(row, ["ecr", "rank", "rk", "overall", "overall rank", "#"]) ?? String(index + 1);
+    const name = pick(row, ["player name", "player", "name"]);
+    const team = pick(row, ["team", "tm"]);
+    const position = (pick(row, ["position", "pos"]) ?? fallbackScope).replace(/\d+$/, "");
+    const bye = pick(row, ["bye", "bye week", "byeweek"]);
+    const positionRank = pick(row, ["pos rank", "position rank", "posrank"]) ?? (position ? `${position}${rank}` : undefined);
+    const playerId = pick(row, ["player id", "player_id", "id"]) ?? `${normalizeName(name ?? "player")}-${team ?? "FA"}-${position ?? "UNK"}`;
+    return {
+      player_id: playerId,
+      player_name: name,
+      player_team_id: team,
+      player_position_id: position || fallbackScope,
+      rank_ecr: rank,
+      pos_rank: positionRank,
+      tier: pick(row, ["tier"]),
+      rank_min: pick(row, ["best", "rank min", "min"]),
+      rank_max: pick(row, ["worst", "rank max", "max"]),
+      rank_ave: pick(row, ["avg", "average", "rank avg"]),
+      rank_std: pick(row, ["std dev", "stddev"]),
+      bye_week: nullableInteger(bye) ?? undefined,
+    };
+  }).filter((row) => Boolean(row.player_name) && Number.isFinite(Number(row.rank_ecr)));
+}
+
+function parseCsv(text: string): Array<Record<string, string>> {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let value = "";
+  let quoted = false;
+  const source = text.replace(/^\uFEFF/, "");
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index];
+    if (quoted) {
+      if (char === "\"" && source[index + 1] === "\"") { value += "\""; index++; }
+      else if (char === "\"") quoted = false;
+      else value += char;
+    } else if (char === "\"") quoted = true;
+    else if (char === ",") { row.push(value); value = ""; }
+    else if (char === "\n") { row.push(value); rows.push(row); row = []; value = ""; }
+    else if (char !== "\r") value += char;
+  }
+  if (value || row.length) { row.push(value); rows.push(row); }
+  const headerIndex = rows.findIndex((candidate) => candidate.some((cell) => normalizeHeader(cell) === "player" || normalizeHeader(cell) === "playername"));
+  const headers = (rows[headerIndex >= 0 ? headerIndex : 0] ?? []).map(normalizeHeader);
+  return rows.slice((headerIndex >= 0 ? headerIndex : 0) + 1)
+    .filter((cells) => cells.some((cell) => cell.trim()))
+    .map((cells) => Object.fromEntries(headers.map((header, index) => [header, cells[index]?.trim() ?? ""])));
+}
+
+function inferCsvScope(rows: Array<Record<string, string>>): string | undefined {
+  for (const row of rows) {
+    const position = pick(row, ["position", "pos"]);
+    if (position) return position.replace(/\d+$/, "").toUpperCase();
+  }
+  return undefined;
+}
+
+function pick(row: Record<string, string>, names: string[]): string | undefined {
+  for (const name of names) {
+    const value = row[normalizeHeader(name)];
+    if (value) return value.trim();
+  }
+  return undefined;
+}
+
+function normalizeHeader(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9#]/g, "");
 }
 
 function integer(value: unknown, fallback: number): number { const parsed = Number(value); return Number.isFinite(parsed) ? Math.trunc(parsed) : fallback; }

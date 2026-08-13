@@ -1747,13 +1747,21 @@ textarea {
 .league-tabs {
   display: flex;
   gap: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
   border-bottom: 1px solid #344154;
   margin-bottom: 26px;
 }
 
 .league-tabs button {
   min-width: 102px;
+  flex: 0 0 auto;
   height: 42px;
+  padding: 0 16px;
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
@@ -1762,6 +1770,7 @@ textarea {
   font-size: 12px;
   font-weight: 800;
   text-transform: capitalize;
+  white-space: nowrap;
 }
 
 .league-tabs button.active { border-color: #347cf5; color: #ffffff; }
@@ -2025,6 +2034,7 @@ textarea {
 .draft-clock.urgent strong { color: #ff5a66; }
 .draft-controls { display: flex; align-items: center; gap: 8px; }
 .draft-time-button { height: 36px; border: 1px solid #405069; border-radius: 4px; background: #101925; padding: 0 10px; color: #fff; font-weight: 800; }
+.draft-time-button.danger { border-color: #dc2626; background: #230b10; color: #fecaca; }
 .draft-setup-band { display: grid; grid-template-columns: minmax(0, 1fr) minmax(250px, 0.65fr) auto; align-items: end; gap: 20px; border-bottom: 1px solid #344154; background: #0d1521; padding: 18px 20px; }
 .draft-setup-band > div:first-child { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 10px; }
 .draft-setup-band label { display: grid; gap: 5px; color: #9aa7b7; font-size: 9px; font-weight: 800; text-transform: uppercase; }
@@ -2050,7 +2060,7 @@ textarea {
 .draft-filters input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: #fff; }
 .draft-filters select { border: 1px solid #405069; border-radius: 4px; background: #080e17; padding: 0 8px; color: #fff; }
 .draft-player-list { max-height: 520px; overflow-y: auto; border-top: 1px solid #344154; }
-.draft-player-list > div { min-height: 54px; display: grid; grid-template-columns: 34px minmax(140px, 1fr) 36px 64px; align-items: center; gap: 8px; border-bottom: 1px solid #273243; padding: 5px 0; }
+.draft-player-list > div { min-height: 54px; display: grid; grid-template-columns: 34px 34px minmax(140px, 1fr) 36px 64px; align-items: center; gap: 8px; border-bottom: 1px solid #273243; padding: 5px 0; }
 .draft-player-list > div.drafted { opacity: 0.42; }
 .draft-player-list > div > b { color: #64748b; font: 700 10px Consolas, monospace; text-align: center; }
 .draft-player-list > div > span { display: grid; }
@@ -2077,7 +2087,7 @@ textarea {
 .team-heading select { height: 36px; border: 1px solid #405069; border-radius: 4px; background: #080e17; padding: 0 10px; color: #fff; }
 .team-layout { display: grid; grid-template-columns: minmax(520px, 1fr) 290px; gap: 26px; padding: 22px 20px 0; }
 .lineup-list { border-top: 1px solid #344154; }
-.lineup-row { width: 100%; min-height: 60px; display: grid; grid-template-columns: 82px minmax(150px, 1fr) 60px 45px; align-items: center; gap: 10px; border: 0; border-bottom: 1px solid #273243; background: transparent; padding: 6px 8px; color: #fff; text-align: left; }
+.lineup-row { width: 100%; min-height: 60px; display: grid; grid-template-columns: 82px 34px minmax(150px, 1fr) 60px 45px; align-items: center; gap: 10px; border: 0; border-bottom: 1px solid #273243; background: transparent; padding: 6px 8px; color: #fff; text-align: left; }
 .lineup-row:hover { background: #0d1623; }
 .lineup-row.selected { background: #10234a; box-shadow: inset 3px 0 #347cf5; }
 .lineup-row.destination { background: #0d2b1b; box-shadow: inset 3px 0 #22c55e; }
@@ -2105,6 +2115,7 @@ textarea {
 .player-compare span, .player-compare small { color: #8290a3; font-size: 9px; }
 .profile-scrim { position: fixed; z-index: 60; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.72); padding: 20px; }
 .player-profile { position: relative; width: min(620px, 100%); max-height: min(720px, 90vh); overflow-y: auto; border: 1px solid #405069; background: #0a111c; padding: 26px; box-shadow: 0 24px 70px rgba(0,0,0,.55); }
+.profile-title { display: flex; align-items: center; gap: 14px; padding-right: 34px; }
 .profile-close { position: absolute; top: 14px; right: 14px; }
 .player-profile h2 { margin: 4px 0; font-size: 25px; }
 .player-profile > p { color: #8f9bad; }
@@ -2177,14 +2188,17 @@ textarea {
 .directory-heading { border-bottom: 1px solid #344154; padding-bottom: 16px; }
 .directory-heading h2 { margin: 2px 0 4px; font-size: 24px; }
 .directory-heading span { color: #8090a4; font-size: 10px; }
-.directory-toolbar { display: flex; align-items: center; gap: 10px; padding: 18px 0; }
+.directory-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 18px 0; }
 .directory-toolbar > label:first-child { min-width: 220px; flex: 1; display: flex; align-items: center; gap: 8px; border: 1px solid #405069; border-radius: 4px; background: #080e17; padding: 0 11px; }
 .directory-toolbar input[type="text"], .directory-toolbar > label:first-child input { width: 100%; height: 38px; border: 0; background: transparent; color: #fff; outline: 0; }
-.directory-toolbar select { height: 40px; border: 1px solid #405069; border-radius: 4px; background: #080e17; padding: 0 10px; color: #fff; }
+.directory-toolbar select { height: 40px; min-width: 118px; border: 1px solid #405069; border-radius: 4px; background: #080e17; padding: 0 10px; color: #fff; }
 .watch-filter { height: 40px; display: flex; align-items: center; gap: 7px; color: #a9b6c8; font-size: 10px; font-weight: 700; }
 .directory-layout { display: grid; grid-template-columns: minmax(520px, 1fr) 250px; gap: 24px; }
 .directory-table { min-height: 280px; border-top: 1px solid #344154; }
-.directory-row { min-height: 54px; display: grid; grid-template-columns: 34px minmax(180px, 1fr) minmax(120px, .6fr) 90px 34px; align-items: center; gap: 10px; border-bottom: 1px solid #273243; padding: 5px 7px; }
+.directory-row { min-height: 54px; display: grid; grid-template-columns: 34px 34px minmax(180px, 1fr) minmax(120px, .6fr) 90px 34px; align-items: center; gap: 10px; border-bottom: 1px solid #273243; padding: 5px 7px; }
+.player-avatar { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; border: 1px solid #405069; background: #101a29; color: #8ab5ff; display: grid; place-items: center; font-size: 9px; font-weight: 800; overflow: hidden; }
+.player-avatar.lg { width: 72px; height: 72px; font-size: 16px; flex: 0 0 auto; }
+.player-avatar.fallback { background: linear-gradient(135deg, #0d2454, #101a29); }
 .expert-rank { color: #75a9ff; font: 700 11px Consolas, monospace; text-align: center; }
 .fantasypros-attribution { display: flex; align-items: center; gap: 8px; margin: 12px 0; border-left: 2px solid #2474ff; background: #0b1626; padding: 9px 11px; color: #9aa8bb; font-size: 10px; line-height: 15px; }
 .fantasypros-attribution svg { flex: 0 0 auto; color: #75a9ff; }
@@ -2202,6 +2216,14 @@ textarea {
 .directory-compare strong { font-size: 11px; }
 .directory-compare span, .directory-compare small { color: #8290a3; font-size: 9px; }
 .directory-compare b { color: #75a9ff; font-size: 9px; }
+.player-profile-page { display: grid; gap: 16px; }
+.player-profile.detail-mode { width: 100%; max-height: none; overflow: visible; }
+.profile-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0; }
+.profile-stats-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.profile-games > div { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; align-items: start; border-top: 1px solid #273243; padding: 10px 0; }
+.profile-games > div > span { display: grid; color: #fff; font-weight: 800; font-size: 11px; }
+.profile-games > div > span small { color: #8290a3; font-size: 8px; font-weight: 700; }
+.profile-games code { overflow-wrap: anywhere; white-space: normal; color: #a8c7ff; font-size: 9px; line-height: 15px; }
 
 .gameday-room { display: grid; gap: 18px; padding: 26px 30px 0; }
 .gameday-heading { display: grid; grid-template-columns: minmax(150px, 1fr) auto auto; align-items: end; gap: 18px; }
@@ -2406,7 +2428,7 @@ textarea {
   .league-grid { grid-template-columns: 1fr; }
   .player-directory { padding-right: 0; padding-left: 0; }
   .directory-toolbar { align-items: stretch; flex-direction: column; }
-  .directory-row { grid-template-columns: 28px minmax(150px, 1fr) 95px 34px; }
+  .directory-row { grid-template-columns: 28px 32px minmax(130px, 1fr) 95px 34px; }
   .directory-row > span:nth-of-type(2) { display: none; }
   .transactions-room { padding-right: 0; padding-left: 0; }
   .transactions-heading { align-items: start; flex-direction: column; gap: 10px; }
@@ -2453,7 +2475,15 @@ textarea {
   .invitation-code strong { font-size: 17px; }
   .league-detail-header { grid-template-columns: 50px minmax(0, 1fr); gap: 12px; }
   .detail-crest { width: 50px; height: 50px; font-size: 13px; }
-  .league-tabs button { min-width: 0; flex: 1; }
+  .league-tabs {
+    margin-inline: -20px;
+    padding-inline: 20px;
+    scroll-padding-inline: 20px;
+  }
+  .league-tabs button {
+    min-width: max-content;
+    flex: 0 0 auto;
+  }
   .metric-strip { grid-template-columns: 1fr; }
   .metric-strip > div { border-left: 0; border-top: 1px solid #303c4e; }
   .metric-strip > div:first-child { border-top: 0; }
@@ -2495,9 +2525,9 @@ textarea {
   .draft-controls { grid-column: 1 / -1; }
   .draft-setup-band > div:first-child { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
   .draft-workspace-grid { padding: 20px 15px 0; }
-  .draft-player-list > div { grid-template-columns: 28px minmax(110px, 1fr) 34px 58px; }
+  .draft-player-list > div { grid-template-columns: 28px 30px minmax(100px, 1fr) 34px 58px; }
   .team-layout { padding: 20px 15px 0; }
-  .lineup-row { grid-template-columns: 62px minmax(120px, 1fr) 48px 38px; }
+  .lineup-row { grid-template-columns: 52px 30px minmax(110px, 1fr) 48px 38px; }
   .gameday-room { padding: 20px 15px 0; }
   .gameday-heading { grid-template-columns: 1fr auto; align-items: start; }
   .gameday-modes { grid-column: 1 / -1; width: 100%; overflow-x: auto; }
