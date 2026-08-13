@@ -9,7 +9,7 @@ const importToken = process.env.MYFFL_FANTASYPROS_CSV_IMPORT_TOKEN;
 const seasonYear = Number(process.env.FANTASYPROS_SEASON_YEAR ?? new Date().getUTCFullYear());
 const scoring = normalizeScoring(process.env.FANTASYPROS_SCORING ?? "PPR");
 const fantasyProsUrl = process.env.FANTASYPROS_RANKINGS_URL ?? "https://www.fantasypros.com/nfl/rankings/qb-cheatsheets.php";
-const scopes = (process.env.FANTASYPROS_CSV_SCOPES ?? "Overall,QB,RB,WR,TE,K,DST")
+const scopes = (process.env.FANTASYPROS_CSV_SCOPES ?? "Overall")
   .split(",")
   .map((scope) => scope.trim())
   .filter(Boolean);
@@ -34,7 +34,6 @@ try {
   await dismissPopups(page);
 
   for (const scope of scopes) {
-    await selectScope(page, scope);
     const csv = await loadRankingsCsv(page, downloadRoot, scope);
     const response = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/internal/fantasypros/csv`, {
       method: "POST",
@@ -93,12 +92,107 @@ async function downloadCsv(page, downloadRoot, scope) {
 }
 
 async function loadRankingsCsv(page, downloadRoot, scope) {
+  const exported = await fetchExportCsv(scope).catch((error) => {
+    console.warn(`${scope}: direct export unavailable. ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  });
+  if (exported) return exported;
+
   try {
+    await selectScope(page, scope);
     return await downloadCsv(page, downloadRoot, scope);
   } catch (error) {
     console.warn(`${scope}: CSV download unavailable, falling back to table extraction. ${error instanceof Error ? error.message : String(error)}`);
     return extractRankingsTableCsv(page, scope);
   }
+}
+
+async function fetchExportCsv(scope) {
+  const url = exportUrlForScope(scope);
+  const response = await fetch(url, {
+    headers: {
+      accept: "application/vnd.ms-excel,text/html,application/xhtml+xml",
+      "user-agent": "Mozilla/5.0 myFFL rankings sync",
+    },
+  });
+  if (!response.ok) throw new Error(`FantasyPros export returned ${response.status}.`);
+  const body = await response.text();
+  const csv = htmlTableToCsv(body);
+  if (!csv) throw new Error("FantasyPros export did not include a rankings table.");
+  return csv;
+}
+
+function exportUrlForScope(scope) {
+  const normalizedScope = scope.toLowerCase();
+  const path = normalizedScope === "overall"
+    ? scoring === "PPR"
+      ? "ppr-cheatsheets.php"
+      : scoring === "HALF"
+        ? "half-point-ppr-cheatsheets.php"
+        : "consensus-cheatsheets.php"
+    : `${normalizedScope === "dst" ? "dst" : normalizedScope}-cheatsheets.php`;
+  const url = new URL(`https://www.fantasypros.com/nfl/rankings/${path}`);
+  url.searchParams.set("export", "xls");
+  return url.toString();
+}
+
+function htmlTableToCsv(html) {
+  const rows = [...html.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)]
+    .map((match) => [...match[1].matchAll(/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi)].map((cell) => decodeHtml(stripTags(cell[1])).trim()))
+    .filter((cells) => cells.some(Boolean));
+  const headerIndex = rows.findIndex((cells) => cells.some((cell) => /player/i.test(cell)));
+  if (headerIndex < 0) return undefined;
+  const headers = rows[headerIndex].map(normalizeExportHeader);
+  const records = rows.slice(headerIndex + 1).map((cells) => {
+    const record = Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ""]));
+    const player = record.Player ?? "";
+    const positionRank = record.Position ?? "";
+    const parsed = parsePlayerCell(player);
+    return {
+      Rank: record.Rank,
+      Player: parsed.name || player,
+      Team: parsed.team || record.Team || "",
+      Position: parsePosition(positionRank),
+      Bye: record.Bye ?? "",
+      Tier: /^tier\s+\d+/i.test(record.Rank ?? "") ? (record.Rank.match(/\d+/)?.[0] ?? "") : record.Tier ?? "",
+    };
+  }).filter((row) => Number.isFinite(Number(row.Rank)) && row.Player);
+  return records.length ? toCsv(records) : undefined;
+}
+
+function normalizeExportHeader(value) {
+  const normalized = value.toLowerCase().replace(/\s+/g, " ").trim();
+  if (normalized === "rk" || normalized === "rank" || normalized === "ecr") return "Rank";
+  if (normalized.includes("player")) return "Player";
+  if (normalized === "pos" || normalized === "position") return "Position";
+  if (normalized.includes("bye")) return "Bye";
+  if (normalized.includes("tier")) return "Tier";
+  if (normalized === "team" || normalized === "tm") return "Team";
+  return value;
+}
+
+function parsePlayerCell(value) {
+  const match = value.match(/^(.*?)\s+\(([A-Z]{2,3})\)/);
+  return match ? { name: match[1].trim(), team: match[2] } : { name: value.trim(), team: "" };
+}
+
+function parsePosition(value) {
+  const match = String(value ?? "").match(/[A-Z]+/);
+  return match?.[0] ?? "";
+}
+
+function stripTags(value) {
+  return value.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+}
+
+function decodeHtml(value) {
+  return value
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, "\"")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
 }
 
 async function extractRankingsTableCsv(page, scope) {
