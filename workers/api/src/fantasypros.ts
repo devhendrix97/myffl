@@ -29,6 +29,7 @@ export interface FantasyProsPlayer {
   player_position_id?: string;
   player_positions?: string;
   player_page_url?: string;
+  player_bye_week?: string | number;
   rank_ecr?: string | number;
   rank_min?: string | number;
   rank_max?: string | number;
@@ -60,6 +61,9 @@ export async function handleFantasyProsRequest(
   }
   if (url.pathname === "/api/internal/fantasypros/csv-sync" && request.method === "POST") {
     return syncFantasyProsCsvFromInternalRequest(request, env);
+  }
+  if (url.pathname === "/api/internal/fantasypros/api-sync" && request.method === "POST") {
+    return syncFantasyProsApiFromInternalRequest(request, env);
   }
   const match = url.pathname.match(/^\/api\/leagues\/([^/]+)\/rankings$/);
   if (!match || request.method !== "GET") return undefined;
@@ -227,7 +231,7 @@ async function syncScope(
           source.player_team_id ?? null, primaryPosition(source), integer(source.rank_ecr, 9999),
           source.pos_rank ?? null, nullableInteger(source.tier), nullableInteger(source.rank_min),
           nullableInteger(source.rank_max), nullableNumber(source.rank_ave), nullableNumber(source.rank_std),
-          source.player_page_url ?? null, null, "API", payload.last_updated ?? null, fetchedAt,
+          source.player_page_url ?? null, nullableInteger(source.player_bye_week), "API", payload.last_updated ?? null, fetchedAt,
         )));
       }
       const positionClause = position === "ALL"
@@ -254,6 +258,32 @@ async function syncScope(
     ).bind(runId, error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500), new Date().toISOString()).run();
     throw error;
   }
+}
+
+export async function syncFantasyProsApiScopeNow(
+  env: Env,
+  options: { seasonYear?: number; scoring?: RankingScoring; position?: "ALL" | "IDP" } = {},
+): Promise<{ seasonYear: number; scoring: RankingScoring; position: "ALL" | "IDP"; status: "succeeded" }> {
+  const apiKey = await resolveFantasyProsApiKey(env);
+  if (!apiKey) throw new ApiException(409, "provider_key_required", "Configure the FantasyPros API key before syncing rankings.");
+  const seasonYear = options.seasonYear ?? new Date().getUTCFullYear();
+  const scoring = options.scoring ?? "PPR";
+  const position = options.position ?? "ALL";
+  await syncScope(env, apiKey, seasonYear, scoring, position, new Date());
+  return { seasonYear, scoring, position, status: "succeeded" };
+}
+
+async function syncFantasyProsApiFromInternalRequest(request: Request, env: Env): Promise<HandlerResult<unknown>> {
+  requireCsvImportToken(request, env);
+  const body = await readJson<{ seasonYear?: number; scoring?: RankingScoring; position?: "ALL" | "IDP" }>(request);
+  const seasonYear = Number(body.seasonYear ?? new Date().getUTCFullYear());
+  if (!Number.isInteger(seasonYear) || seasonYear < 2020 || seasonYear > 2100) {
+    throw new ApiException(400, "invalid_season_year", "Choose a valid FantasyPros season year.");
+  }
+  const scoring = body.scoring && SCORING.includes(body.scoring) ? body.scoring : "PPR";
+  const position = body.position === "IDP" ? "IDP" : "ALL";
+  const result = await syncFantasyProsApiScopeNow(env, { seasonYear, scoring, position });
+  return { status: 201, data: { ...result, sourceName: SOURCE_NAME, importedAtUtc: new Date().toISOString() } };
 }
 
 async function reserveFantasyProsRequest(db: D1Database, requestDate: string, now: Date): Promise<void> {

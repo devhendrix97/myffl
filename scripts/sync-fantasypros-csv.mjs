@@ -4,13 +4,13 @@ const apiBaseUrl = process.env.MYFFL_API_BASE_URL ?? "https://api.myfflapp.com";
 const importToken = process.env.MYFFL_FANTASYPROS_CSV_IMPORT_TOKEN;
 const seasonYear = Number(process.env.FANTASYPROS_SEASON_YEAR ?? new Date().getUTCFullYear());
 const scoring = normalizeScoring(process.env.FANTASYPROS_SCORING ?? "PPR");
-const scope = process.env.FANTASYPROS_CSV_SCOPE ?? "OVERALL";
+const position = process.env.FANTASYPROS_POSITION_SCOPE ?? "ALL";
 
 if (!importToken) {
   throw new Error("MYFFL_FANTASYPROS_CSV_IMPORT_TOKEN is required.");
 }
 
-const response = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/internal/fantasypros/csv-sync`, {
+const response = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/internal/fantasypros/api-sync`, {
   method: "POST",
   headers: {
     authorization: `Bearer ${importToken}`,
@@ -19,13 +19,12 @@ const response = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/internal/fant
   body: JSON.stringify({
     seasonYear,
     scoring,
-    scope,
-    sourceUpdatedAt: new Date().toISOString(),
+    position,
   }),
 });
 
 const text = await response.text();
-if (!response.ok) throw new Error(`FantasyPros CSV sync failed with ${response.status}: ${text}`);
+if (!response.ok) throw new Error(`FantasyPros rankings sync failed with ${response.status}: ${text}`);
 console.log(text);
 
 function normalizeScoring(value) {
