@@ -35,7 +35,7 @@ try {
 
   for (const scope of scopes) {
     await selectScope(page, scope);
-    const csv = await downloadCsv(page, downloadRoot, scope);
+    const csv = await loadRankingsCsv(page, downloadRoot, scope);
     const response = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/internal/fantasypros/csv`, {
       method: "POST",
       headers: {
@@ -92,6 +92,42 @@ async function downloadCsv(page, downloadRoot, scope) {
   return fs.readFile(path.join(downloadRoot, file), "utf8");
 }
 
+async function loadRankingsCsv(page, downloadRoot, scope) {
+  try {
+    return await downloadCsv(page, downloadRoot, scope);
+  } catch (error) {
+    console.warn(`${scope}: CSV download unavailable, falling back to table extraction. ${error instanceof Error ? error.message : String(error)}`);
+    return extractRankingsTableCsv(page, scope);
+  }
+}
+
+async function extractRankingsTableCsv(page, scope) {
+  const rows = await page.evaluate((fallbackScope) => {
+    const visibleTables = [...document.querySelectorAll("table")]
+      .filter((table) => table.getClientRects().length > 0 && table.textContent?.toLowerCase().includes("player"));
+    const table = visibleTables[0];
+    if (!table) return [];
+    const headers = [...table.querySelectorAll("thead th")].map((cell) => cell.textContent?.trim() ?? "");
+    const bodyRows = [...table.querySelectorAll("tbody tr")];
+    return bodyRows.map((row, rowIndex) => {
+      const cells = [...row.querySelectorAll("th,td")].map((cell) => cell.textContent?.replace(/\s+/g, " ").trim() ?? "");
+      const record = Object.fromEntries(headers.map((header, index) => [header || `Column ${index + 1}`, cells[index] ?? ""]));
+      const playerCell = cells.find((cell) => /[A-Za-z]/.test(cell) && !/^(QB|RB|WR|TE|K|DST|DEF|ARI|ATL|BAL|BUF|CAR|CHI|CIN|CLE|DAL|DEN|DET|GB|HOU|IND|JAX|KC|LV|LAC|LAR|MIA|MIN|NE|NO|NYG|NYJ|PHI|PIT|SEA|SF|TB|TEN|WAS)$/i.test(cell));
+      return {
+        Rank: record.RK ?? record.Rank ?? record.ECR ?? cells[0] ?? String(rowIndex + 1),
+        Player: record.PLAYER ?? record.Player ?? playerCell ?? "",
+        Team: record.TEAM ?? record.Team ?? record.TM ?? record.Tm ?? "",
+        Position: record.POS ?? record.Position ?? fallbackScope,
+        Bye: record.BYE ?? record.Bye ?? record["Bye Week"] ?? "",
+        Tier: record.TIERS ?? record.Tier ?? "",
+      };
+    }).filter((row) => row.Player && Number.isFinite(Number(String(row.Rank).replace(/[^0-9.]/g, ""))));
+  }, scope.toUpperCase());
+
+  if (!rows.length) throw new Error(`Could not extract FantasyPros rankings table for ${scope}.`);
+  return toCsv(rows);
+}
+
 async function waitForNewCsv(downloadRoot, before) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
@@ -121,4 +157,18 @@ function normalizeScoring(value) {
   const scoringValue = value.toUpperCase();
   if (!["STD", "HALF", "PPR"].includes(scoringValue)) throw new Error("FANTASYPROS_SCORING must be STD, HALF, or PPR.");
   return scoringValue;
+}
+
+function toCsv(rows) {
+  const headers = ["Rank", "Player", "Team", "Position", "Bye", "Tier"];
+  return [
+    headers.join(","),
+    ...rows.map((row) => headers.map((header) => csvCell(row[header])).join(",")),
+  ].join("\n");
+}
+
+function csvCell(value) {
+  const text = String(value ?? "");
+  if (!/[",\n\r]/.test(text)) return text;
+  return `"${text.replace(/"/g, "\"\"")}"`;
 }
