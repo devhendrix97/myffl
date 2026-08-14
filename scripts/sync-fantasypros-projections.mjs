@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
@@ -58,6 +58,11 @@ async function downloadProjectionCsvs(positionList, type) {
       const before = await existingCsvs(downloadDir);
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45_000 });
       await page.waitForSelector("a.export", { timeout: 20_000 });
+      const directFile = await downloadExportHref(page, downloadDir, position);
+      if (directFile) {
+        files.push({ position, file: directFile });
+        continue;
+      }
       await page.click("a.export");
       const file = await waitForNewCsv(downloadDir, before);
       files.push({ position, file });
@@ -69,6 +74,26 @@ async function downloadProjectionCsvs(positionList, type) {
       process.on("exit", () => void rm(downloadDir, { recursive: true, force: true }));
     }
   }
+}
+
+async function downloadExportHref(page, downloadDir, position) {
+  const href = await page.$eval("a.export", (anchor) => anchor.href).catch(() => "");
+  if (!href || href.startsWith("javascript:")) return undefined;
+  const cookies = await page.cookies();
+  const cookie = cookies.map((item) => `${item.name}=${item.value}`).join("; ");
+  const response = await fetch(href, {
+    headers: {
+      accept: "text/csv,application/vnd.ms-excel,text/plain,*/*",
+      cookie,
+      "user-agent": await page.evaluate(() => navigator.userAgent),
+    },
+  });
+  if (!response.ok) throw new Error(`FantasyPros ${position} export returned ${response.status}.`);
+  const text = await response.text();
+  if (!text.includes("Player") || !text.includes("Team")) return undefined;
+  const file = path.join(downloadDir, `fantasypros-projections-${position.toLowerCase()}.csv`);
+  await writeFile(file, text, "utf8");
+  return file;
 }
 
 async function csvFilesFromDirectory(directory, positionList) {
@@ -83,7 +108,7 @@ async function csvFilesFromDirectory(directory, positionList) {
 
 async function existingCsvs(directory) {
   try {
-    return new Set((await readdir(directory)).filter((file) => file.toLowerCase().endsWith(".csv")));
+    return new Set((await readdir(directory)).filter((file) => /\.(csv|xls)$/i.test(file)));
   } catch {
     return new Set();
   }
