@@ -51,6 +51,7 @@ async function downloadProjectionCsvs(positionList, type) {
     const url = projectionUrl(position, type);
     const csv = await fetchProjectionPageCsv(url);
     if (!csv) {
+      console.log(`Direct FantasyPros table fetch did not produce CSV for ${position}; falling back to browser export.`);
       browserPositions.push(position);
       continue;
     }
@@ -106,8 +107,17 @@ async function fetchProjectionPageCsv(url) {
       "user-agent": "Mozilla/5.0 myFFL projections sync",
     },
   });
-  if (!response.ok) return undefined;
-  return projectionHtmlToCsv(await response.text());
+  if (!response.ok) {
+    console.log(`FantasyPros page fetch returned ${response.status} for ${url}.`);
+    return undefined;
+  }
+  const html = await response.text();
+  const csv = projectionHtmlToCsv(html);
+  if (!csv) {
+    const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/\s+/g, " ").trim();
+    console.log(`FantasyPros page table parse failed for ${url}. title=${title ?? "unknown"} hasDataTable=${html.includes("id=\"data\"") || html.includes("id='data'")}`);
+  }
+  return csv;
 }
 
 function projectionHtmlToCsv(html) {
