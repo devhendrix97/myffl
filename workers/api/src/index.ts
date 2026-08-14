@@ -36,6 +36,7 @@ import { handleMatchupRequest } from "./matchups";
 import { handleCommunicationRequest } from "./communication";
 import { handleNotificationRequest, processNotificationQueue, type NotificationJob } from "./notifications";
 import { handleFantasyProsRequest, syncFantasyProsIfDue } from "./fantasypros";
+import { handleFantasyProsProjectionRequest } from "./fantasypros-projections";
 import { handleAssetRequest } from "./assets";
 export { LeagueRealtime, LiveNflEvent, MatchupRealtime } from "./realtime";
 
@@ -209,6 +210,8 @@ async function routeRequest(
   if (notificationResult) return notificationResult;
   const fantasyProsResult = await handleFantasyProsRequest(request, url, env);
   if (fantasyProsResult) return fantasyProsResult;
+  const fantasyProsProjectionResult = await handleFantasyProsProjectionRequest(request, url, env);
+  if (fantasyProsProjectionResult) return fantasyProsProjectionResult;
   return undefined;
 }
 

@@ -33,3 +33,11 @@ pnpm exec wrangler secret put PROVIDER_CREDENTIAL_ENCRYPTION_KEY --config worker
 The Admin screen shows the masked key suffix, storage source, enabled state, validation timestamp, daily request usage, and recent request ledger. It also provides an audited manual snapshot refresh. Validation and manual refresh requests use the same database-backed daily circuit breaker as scheduled synchronization.
 
 The draft board and league Players tab always display the attribution: "FantasyPros Expert Consensus Rankings," linked to the FantasyPros consensus rankings page.
+
+## Projection CSV Imports
+
+Projected stats are imported from FantasyPros CSV exports separately from rankings. The import stores raw projected stat columns in D1 and intentionally ignores FantasyPros `FPTS`, because myFFL recalculates projected points from each league's scoring rules.
+
+Weekly projections are downloaded by `.github/workflows/fantasypros-projections-sync.yml` on Tuesdays. The browser automation runs in GitHub Actions with Puppeteer, posts each CSV to `/api/internal/fantasypros/projections/csv`, and the Worker writes normalized provider-stat keys such as `passing:YDS`, `rushing:TD`, and `receiving:REC` into `fantasypros_projections.projected_stats_json`.
+
+Season projections use the same importer with `FANTASYPROS_PROJECTION_TYPE=season`. Weekly imports may pass `FANTASYPROS_WEEK`, but the API can infer the next scheduled NFL week from D1 when the workflow omits it. CSV filenames are not trusted to determine season-vs-weekly scope, so the workflow or manual import must pass the projection type explicitly.
