@@ -38,6 +38,8 @@ The draft board and league Players tab always display the attribution: "FantasyP
 
 Projected stats are imported from FantasyPros CSV exports separately from rankings. The import stores raw projected stat columns in D1 and intentionally ignores FantasyPros `FPTS`, because myFFL recalculates projected points from each league's scoring rules.
 
-Weekly projections are downloaded by `.github/workflows/fantasypros-projections-sync.yml` on Tuesdays. The browser automation runs in GitHub Actions with Puppeteer, posts each CSV to `/api/internal/fantasypros/projections/csv`, and the Worker writes normalized provider-stat keys such as `passing:YDS`, `rushing:TD`, and `receiving:REC` into `fantasypros_projections.projected_stats_json`.
+Weekly projections are downloaded by `.github/workflows/fantasypros-projections-sync.yml` on Tuesdays. The sync reads FantasyPros projection tables, posts each CSV to `/api/internal/fantasypros/projections/csv`, and the Worker writes normalized provider-stat keys such as `passing:YDS`, `rushing:TD`, and `receiving:REC` into `fantasypros_projections.projected_stats_json`.
 
 Season projections use the same importer with `FANTASYPROS_PROJECTION_TYPE=season`. Weekly imports may pass `FANTASYPROS_WEEK`, but the API can infer the next scheduled NFL week from D1 when the workflow omits it. CSV filenames are not trusted to determine season-vs-weekly scope, so the workflow or manual import must pass the projection type explicitly.
+
+GitHub-hosted unauthenticated requests may only see FantasyPros' public top rows. The script rejects partial exports by default; configure the repository secret `FANTASYPROS_COOKIE` with an authenticated FantasyPros cookie string, or set `FANTASYPROS_PROJECTION_INPUT_DIR` for manual CSV uploads from exported files.

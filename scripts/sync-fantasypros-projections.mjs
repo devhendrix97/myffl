@@ -44,6 +44,8 @@ const weekNumber = process.env.FANTASYPROS_WEEK ? Number(process.env.FANTASYPROS
 const apiBaseUrl = process.env.MYFFL_API_BASE_URL ?? "https://api.myfflapp.com";
 const importToken = process.env.MYFFL_FANTASYPROS_CSV_IMPORT_TOKEN;
 const inputDirectory = process.env.FANTASYPROS_PROJECTION_INPUT_DIR;
+const allowPartial = process.env.FANTASYPROS_ALLOW_PARTIAL_PROJECTIONS === "true";
+const fantasyProsCookie = process.env.FANTASYPROS_COOKIE;
 
 if (!importToken) throw new Error("MYFFL_FANTASYPROS_CSV_IMPORT_TOKEN is required.");
 if (!Number.isInteger(seasonYear) || seasonYear < 2020) throw new Error("FANTASYPROS_SEASON_YEAR must be a valid NFL season.");
@@ -57,6 +59,11 @@ const csvFiles = inputDirectory
 
 for (const item of csvFiles) {
   const csv = await readFile(item.file, "utf8");
+  const rows = csvRecordCount(csv);
+  const minimumRows = minimumProjectionRows(item.position, projectionType);
+  if (!allowPartial && rows < minimumRows) {
+    throw new Error(`FantasyPros ${item.position} ${projectionType} projection export only had ${rows} rows; expected at least ${minimumRows}. Provide an authenticated export source or set FANTASYPROS_ALLOW_PARTIAL_PROJECTIONS=true for smoke tests.`);
+  }
   const response = await fetch(`${apiBaseUrl.replace(/\/$/, "")}/api/internal/fantasypros/projections/csv`, {
     method: "POST",
     headers: {
@@ -139,6 +146,7 @@ async function fetchProjectionPageCsv(url) {
   const response = await fetch(url, {
     headers: {
       accept: "text/html,application/xhtml+xml",
+      ...(fantasyProsCookie ? { cookie: fantasyProsCookie } : {}),
       "user-agent": "Mozilla/5.0 myFFL projections sync",
     },
   });
@@ -248,6 +256,15 @@ function normalizePositions(value) {
     if (!["QB", "RB", "WR", "TE", "K", "DST"].includes(position)) throw new Error(`Unsupported projection position: ${position}`);
   }
   return positions;
+}
+
+function csvRecordCount(csv) {
+  return csv.split(/\r?\n/).filter((line, index) => index > 0 && line.trim()).length;
+}
+
+function minimumProjectionRows(position, type) {
+  if (type === "season") return ({ QB: 24, RB: 60, WR: 80, TE: 40, K: 24, DST: 24 })[position] ?? 20;
+  return ({ QB: 20, RB: 40, WR: 50, TE: 25, K: 20, DST: 20 })[position] ?? 20;
 }
 
 function stripTags(value) {

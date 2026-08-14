@@ -26,6 +26,7 @@ jobs:
     env:
       MYFFL_API_BASE_URL: https://api.myfflapp.com
       MYFFL_FANTASYPROS_CSV_IMPORT_TOKEN: ${{ secrets.MYFFL_FANTASYPROS_CSV_IMPORT_TOKEN }}
+      FANTASYPROS_COOKIE: ${{ secrets.FANTASYPROS_COOKIE }}
       FANTASYPROS_SEASON_YEAR: ${{ github.event.inputs.season_year || '2026' }}
       FANTASYPROS_WEEK: ${{ github.event.inputs.week }}
       FANTASYPROS_PROJECTION_TYPE: ${{ github.event.inputs.projection_type || 'weekly' }}
