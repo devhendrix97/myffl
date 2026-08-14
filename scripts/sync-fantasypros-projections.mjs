@@ -43,9 +43,28 @@ for (const item of csvFiles) {
 }
 
 async function downloadProjectionCsvs(positionList, type) {
-  const { launch } = await import("puppeteer");
   const downloadDir = path.resolve(".tmp", "fantasypros-projections", `${Date.now()}`);
   await mkdir(downloadDir, { recursive: true });
+  const files = [];
+  const browserPositions = [];
+  for (const position of positionList) {
+    const url = projectionUrl(position, type);
+    const csv = await fetchProjectionPageCsv(url);
+    if (!csv) {
+      browserPositions.push(position);
+      continue;
+    }
+    const file = path.join(downloadDir, `fantasypros-projections-${position.toLowerCase()}.csv`);
+    await writeFile(file, csv, "utf8");
+    files.push({ position, file });
+  }
+  if (!browserPositions.length) return files;
+  files.push(...await downloadProjectionCsvsWithBrowser(browserPositions, type, downloadDir));
+  return files;
+}
+
+async function downloadProjectionCsvsWithBrowser(positionList, type, downloadDir) {
+  const { launch } = await import("puppeteer");
   const browser = await launch({ headless: "new", args: ["--no-sandbox", "--disable-setuid-sandbox"] });
   try {
     const page = await browser.newPage();
@@ -54,7 +73,7 @@ async function downloadProjectionCsvs(positionList, type) {
     await client.send("Page.setDownloadBehavior", { behavior: "allow", downloadPath: downloadDir });
     const files = [];
     for (const position of positionList) {
-      const url = `https://www.fantasypros.com/nfl/projections/${position.toLowerCase()}.php${type === "season" ? "?week=draft" : ""}`;
+      const url = projectionUrl(position, type);
       const before = await existingCsvs(downloadDir);
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45_000 });
       await page.waitForSelector("a.export", { timeout: 20_000 });
@@ -74,6 +93,50 @@ async function downloadProjectionCsvs(positionList, type) {
       process.on("exit", () => void rm(downloadDir, { recursive: true, force: true }));
     }
   }
+}
+
+function projectionUrl(position, type) {
+  return `https://www.fantasypros.com/nfl/projections/${position.toLowerCase()}.php${type === "season" ? "?week=draft" : ""}`;
+}
+
+async function fetchProjectionPageCsv(url) {
+  const response = await fetch(url, {
+    headers: {
+      accept: "text/html,application/xhtml+xml",
+      "user-agent": "Mozilla/5.0 myFFL projections sync",
+    },
+  });
+  if (!response.ok) return undefined;
+  return projectionHtmlToCsv(await response.text());
+}
+
+function projectionHtmlToCsv(html) {
+  const rows = [...html.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)]
+    .map((match) => [...match[1].matchAll(/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi)]
+      .map((cell) => decodeHtml(stripTags(cell[1])).trim().replace(/\s+/g, " ")))
+    .filter((cells) => cells.some(Boolean));
+  const headerIndex = rows.findIndex((cells) => cells[0]?.toLowerCase() === "player");
+  if (headerIndex < 0) return undefined;
+  const rawHeaders = rows[headerIndex].map((header) => header.toUpperCase() === "FPTS" ? "FPTS" : header);
+  const headers = rawHeaders[1]?.toLowerCase() === "team" ? rawHeaders : [rawHeaders[0], "Team", ...rawHeaders.slice(1)];
+  const records = rows.slice(headerIndex + 1)
+    .map((cells) => normalizeProjectionCells(headers, cells))
+    .filter((cells) => cells.length === headers.length && cells[0] && cells[1] && cells.slice(2).some((cell) => cell !== ""));
+  return records.length ? [headers, ...records].map((row) => row.map(csvCell).join(",")).join("\n") : undefined;
+}
+
+function normalizeProjectionCells(headers, cells) {
+  if (cells.length === headers.length) return cells;
+  if (cells.length === headers.length - 1) {
+    const parsed = parsePlayerTeam(cells[0]);
+    return [parsed.player, parsed.team, ...cells.slice(1)];
+  }
+  return cells.slice(0, headers.length);
+}
+
+function parsePlayerTeam(value) {
+  const match = value.match(/^(.*?)\s+([A-Z]{2,3})$/);
+  return match ? { player: match[1].trim(), team: match[2] } : { player: value.trim(), team: "" };
 }
 
 async function downloadExportHref(page, downloadDir, position) {
@@ -138,4 +201,26 @@ function normalizePositions(value) {
     if (!["QB", "RB", "WR", "TE", "K", "DST"].includes(position)) throw new Error(`Unsupported projection position: ${position}`);
   }
   return positions;
+}
+
+function stripTags(value) {
+  return value.replace(/<[^>]+>/g, " ");
+}
+
+function decodeHtml(value) {
+  return value
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#160;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&quot;/g, "\"")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+function csvCell(value) {
+  const text = String(value ?? "");
+  if (!/[",\n\r]/.test(text)) return text;
+  return `"${text.replace(/"/g, "\"\"")}"`;
 }
