@@ -139,10 +139,7 @@ export async function runProviderJob(env: Env, job: ProviderJob): Promise<void> 
     return;
   }
   await withSyncRun(env, "scoreboard", PRODUCTION_SCOPE, async (context) => {
-    const suffix = job.date ? `?dates=${encodeURIComponent(job.date)}&limit=100` : "?limit=100";
-    const result = await fetchEspn(`https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard${suffix}`);
-    await archive(context, result.raw, job.date ?? "current");
-    const summaries = await ingestScoreboard(context, result.payload);
+    const summaries = await syncCoreScoreboard(context, job.date);
     if (summaries.length) {
       await env.ESPN_UPDATES_QUEUE.sendBatch(summaries.map((eventId) => ({
         body: { type: "sync-summary", eventId } satisfies ProviderJob,
@@ -290,11 +287,66 @@ async function ingestSeasonSchedule(context: SyncContext, seasonYear: number): P
   }
 }
 
-async function ingestCoreEvent(context: SyncContext, ref: string, seasonYear: number, seasonType: number, week: number): Promise<void> {
+async function syncCoreScoreboard(context: SyncContext, date?: string): Promise<string[]> {
+  const range = scoreboardRefreshRange(date, new Date(context.now));
+  const rows = await context.env.NFL_DB.prepare(
+    `select events.provider_event_id as providerEventId, events.season_year as seasonYear,
+      events.season_type as seasonType, events.week, events.starts_at_utc as startsAtUtc,
+      snapshots.status as snapshotStatus
+     from nfl_events events
+     left join nfl_event_snapshots snapshots on snapshots.nfl_event_id = events.nfl_event_id and snapshots.data_scope = ?1
+     where events.provider = ?2
+      and (snapshots.status = 'in' or (events.starts_at_utc >= ?3 and events.starts_at_utc < ?4))
+     order by case snapshots.status when 'in' then 0 else 1 end, events.starts_at_utc
+     limit 64`,
+  ).bind(context.scope, PROVIDER, range.start.toISOString(), range.end.toISOString()).all<{
+    providerEventId: string;
+    seasonYear: number;
+    seasonType: number;
+    week: number;
+  }>();
+  const summaries: string[] = [];
+  for (const row of rows.results ?? []) {
+    if (!/^\d+$/.test(row.providerEventId)) {
+      warn(context, "nfl_events.provider_event_id", `Skipping non-ESPN event id ${row.providerEventId}`);
+      continue;
+    }
+    const result = await fetchEspn(coreEventUrl(row.providerEventId));
+    await archive(context, result.raw, row.providerEventId);
+    const state = await ingestCoreEventPayload(context, result.payload, row.seasonYear, row.seasonType, row.week);
+    if (context.scope === PRODUCTION_SCOPE && (state === "in" || state === "post")) summaries.push(row.providerEventId);
+  }
+  return summaries;
+}
+
+function scoreboardRefreshRange(date: string | undefined, now: Date): { start: Date; end: Date } {
+  if (date) {
+    const normalized = date.replaceAll("-", "");
+    const match = normalized.match(/^(\d{4})(\d{2})(\d{2})$/);
+    if (match) {
+      const start = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+      return { start, end: new Date(start.getTime() + 24 * 60 * 60_000) };
+    }
+  }
+  return {
+    start: new Date(now.getTime() - 6 * 60 * 60_000),
+    end: new Date(now.getTime() + 54 * 60 * 60_000),
+  };
+}
+
+function coreEventUrl(providerEventId: string): string {
+  return `https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/events/${encodeURIComponent(providerEventId)}?lang=en&region=us`;
+}
+
+async function ingestCoreEvent(context: SyncContext, ref: string, seasonYear: number, seasonType: number, week: number): Promise<string | null> {
   const event = (await fetchEspn(coreHttps(ref))).payload;
+  return ingestCoreEventPayload(context, event, seasonYear, seasonType, week);
+}
+
+async function ingestCoreEventPayload(context: SyncContext, event: JsonObject, seasonYear: number, seasonType: number, week: number): Promise<string | null> {
   const providerId = string(event.id);
-  if (!providerId) return warn(context, "core.event.id", "Core event did not include an id");
-  const competition = object(array(event.competitions)[0]);
+  if (!providerId) { warn(context, "core.event.id", "Core event did not include an id"); return null; }
+  const competition = await coreCompetition(event);
   const competitors = array(competition.competitors).map(object);
   const home = competitors.find((item) => string(item.homeAway) === "home") ?? {};
   const away = competitors.find((item) => string(item.homeAway) === "away") ?? {};
@@ -334,6 +386,15 @@ async function ingestCoreEvent(context: SyncContext, ref: string, seasonYear: nu
   ]);
   context.seen++;
   context.written++;
+  return state;
+}
+
+async function coreCompetition(event: JsonObject): Promise<JsonObject> {
+  const competition = object(array(event.competitions)[0]);
+  if (array(competition.competitors).length) return competition;
+  const ref = string(competition.$ref);
+  if (!ref) return competition;
+  return (await fetchEspn(coreHttps(ref))).payload;
 }
 
 async function coreStatus(competition: JsonObject): Promise<JsonObject> {
