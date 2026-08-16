@@ -238,7 +238,7 @@ function selectNflWeek(weeks: NflWeekOption[], key: string | null): NflWeekOptio
 }
 
 function weekLabel(seasonType: number, week: number): string {
-  if (seasonType === 1) return `Preseason Week ${week}`;
+  if (seasonType === 1) return week === 1 ? "Hall of Fame Game" : `Preseason Week ${week - 1}`;
   if (seasonType === 3) return `Playoffs Week ${week}`;
   return `Week ${week}`;
 }

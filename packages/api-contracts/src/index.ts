@@ -478,6 +478,7 @@ export interface PlayerProfileResponse {
   injuryStatus?: string;
   rosteredByTeamId?: string;
   rosteredByTeamName?: string;
+  seasonOutlook?: string;
   watched: boolean;
   availableActions: Array<"add" | "claim" | "trade-for" | "trade-away" | "draft-queue" | "watch">;
   yearlyStats: Array<{ seasonYear: number; games: number; stats: Record<string, unknown> }>;

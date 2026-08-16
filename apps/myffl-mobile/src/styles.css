@@ -2133,6 +2133,10 @@ textarea {
 .player-profile h2 { margin: 4px 0; font-size: 25px; }
 .player-profile > p { color: #8f9bad; }
 .profile-injury { display: inline-block; margin: 4px 0 12px; border: 1px solid #dc2626; border-radius: 4px; background: #361017; padding: 5px 8px; color: #ff9aa1; font-size: 9px; font-weight: 800; text-transform: uppercase; }
+.profile-outlook { margin-top: 18px; border-top: 1px solid #344154; padding-top: 16px; }
+.profile-outlook h3 { margin: 0 0 8px; font-size: 14px; }
+.profile-outlook p { margin: 0; max-width: 980px; color: #aab6c8; font-size: 12px; line-height: 20px; }
+.profile-outlook.compact p { font-size: 11px; line-height: 18px; }
 .profile-games { margin-top: 24px; border-top: 1px solid #344154; padding-top: 16px; }
 .profile-games h3 { font-size: 14px; }
 .profile-games > div { display: grid; grid-template-columns: 145px minmax(0,1fr); gap: 10px; border-bottom: 1px solid #273243; padding: 8px 0; }

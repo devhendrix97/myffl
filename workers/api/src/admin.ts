@@ -86,10 +86,11 @@ async function requirePlatformAdmin(request: Request, env: Env): Promise<AdminPr
 
 function providerJob(resource: string | undefined): ProviderJob {
   if (!resource || resource === "scoreboard") return { type: "sync-scoreboard" };
+  if (resource === "schedule") return { type: "sync-schedule" };
   if (resource === "teams") return { type: "sync-teams" };
   if (resource === "injuries") return { type: "sync-injuries" };
   if (resource === "projections") return { type: "sync-projections" };
-  throw new ApiException(400, "invalid_provider_resource", "Resource must be scoreboard, teams, injuries, or projections.");
+  throw new ApiException(400, "invalid_provider_resource", "Resource must be scoreboard, schedule, teams, injuries, or projections.");
 }
 
 async function providerDashboard(env: Env): Promise<unknown> {

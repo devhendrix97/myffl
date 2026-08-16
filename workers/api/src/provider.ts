@@ -10,6 +10,7 @@ const PROVIDER_ASSET_PREFIX = "provider-assets/espn/nfl";
 export type ProviderJob =
   | { type: "sync-teams" }
   | { type: "sync-scoreboard"; date?: string }
+  | { type: "sync-schedule"; seasonYear?: number }
   | { type: "sync-injuries" }
   | { type: "sync-summary"; eventId: string; dataScope?: string }
   | { type: "sync-projections"; seasonYear?: number };
@@ -53,8 +54,10 @@ export async function enqueueScheduledProviderWork(env: Env): Promise<void> {
       (select count(*) from nfl_teams) as teamCount,
       (select count(*) from nfl_teams where logo_object_key is null) as teamsMissingLogos,
       (select count(*) from nfl_player_injuries where data_scope = 'production') as injuryCount,
+      (select count(*) from nfl_events where season_year = ?1) as eventCount,
       (select count(*) from player_projections where provider = 'espn' and season_year = ?1) as projectionCount`,
-  ).bind(now.getUTCFullYear()).first<{ teamCount: number; teamsMissingLogos: number; injuryCount: number; projectionCount: number }>();
+  ).bind(now.getUTCFullYear()).first<{ teamCount: number; teamsMissingLogos: number; injuryCount: number; eventCount: number; projectionCount: number }>();
+  if ((bootstrap?.eventCount ?? 0) < 250) jobs.push({ type: "sync-schedule", seasonYear: now.getUTCFullYear() });
   if ((bootstrap?.teamCount ?? 0) < 32 || (bootstrap?.teamsMissingLogos ?? 0) > 0) jobs.push({ type: "sync-teams" });
   if ((bootstrap?.injuryCount ?? 0) === 0) jobs.push({ type: "sync-injuries" });
   if ((bootstrap?.projectionCount ?? 0) < 100) {
@@ -107,6 +110,12 @@ export async function runProviderJob(env: Env, job: ProviderJob): Promise<void> 
       const result = await fetchEspn("https://site.api.espn.com/apis/site/v2/sports/football/nfl/injuries?limit=100");
       await archive(context, result.raw, "current");
       await ingestInjuries(context, result.payload);
+    });
+    return;
+  }
+  if (job.type === "sync-schedule") {
+    await withSyncRun(env, "schedule", PRODUCTION_SCOPE, async (context) => {
+      await ingestSeasonSchedule(context, job.seasonYear ?? new Date().getUTCFullYear());
     });
     return;
   }
@@ -265,6 +274,95 @@ async function ingestTeams(context: SyncContext, payload: JsonObject): Promise<v
   const leagues = sports.flatMap((sport) => array(object(sport).leagues));
   const entries = leagues.flatMap((league) => array(object(league).teams));
   for (const entry of entries) await upsertTeam(context, object(object(entry).team));
+}
+
+async function ingestSeasonSchedule(context: SyncContext, seasonYear: number): Promise<void> {
+  for (const seasonType of [1, 2, 3]) {
+    const maxWeek = seasonType === 1 ? 5 : seasonType === 2 ? 18 : 6;
+    for (let week = 1; week <= maxWeek; week++) {
+      const url = `https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/${seasonYear}/types/${seasonType}/weeks/${week}/events?lang=en&region=us&limit=100`;
+      const result = await fetchEspn(url);
+      await archive(context, result.raw, `${seasonYear}-${seasonType}-${week}`);
+      const refs = array(result.payload.items).map((item) => string(object(item).$ref)).filter((value): value is string => Boolean(value));
+      if (!refs.length && seasonType === 3 && week > 1) break;
+      for (const ref of refs) await ingestCoreEvent(context, ref, seasonYear, seasonType, week);
+    }
+  }
+}
+
+async function ingestCoreEvent(context: SyncContext, ref: string, seasonYear: number, seasonType: number, week: number): Promise<void> {
+  const event = (await fetchEspn(coreHttps(ref))).payload;
+  const providerId = string(event.id);
+  if (!providerId) return warn(context, "core.event.id", "Core event did not include an id");
+  const competition = object(array(event.competitions)[0]);
+  const competitors = array(competition.competitors).map(object);
+  const home = competitors.find((item) => string(item.homeAway) === "home") ?? {};
+  const away = competitors.find((item) => string(item.homeAway) === "away") ?? {};
+  const homeTeamId = teamIdFromCoreCompetitor(home);
+  const awayTeamId = teamIdFromCoreCompetitor(away);
+  const status = await coreStatus(competition);
+  const startsAt = string(event.date) ?? string(competition.date) ?? context.now;
+  const statusType = object(status.type);
+  const state = string(statusType.state) ?? "pre";
+  const started = state !== "pre" || Date.parse(startsAt) <= Date.now();
+  const [homeScore, awayScore] = started ? await Promise.all([coreScore(home), coreScore(away)]) : [0, 0];
+  const eventId = `espn-event-${providerId}`;
+  await context.env.NFL_DB.batch([
+    context.env.NFL_DB.prepare(
+      `insert into nfl_events
+        (nfl_event_id, provider, provider_event_id, season_year, season_type, week,
+         starts_at_utc, status, created_at_utc, updated_at_utc)
+       values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+       on conflict(provider, provider_event_id) do update set season_year = excluded.season_year,
+        season_type = excluded.season_type, week = excluded.week, starts_at_utc = excluded.starts_at_utc,
+        status = excluded.status, updated_at_utc = excluded.updated_at_utc`,
+    ).bind(eventId, PROVIDER, providerId, seasonYear, seasonType, week, startsAt, state, context.now),
+    context.env.NFL_DB.prepare(
+      `insert into nfl_event_snapshots
+        (nfl_event_id, data_scope, status, status_detail, period, clock, completed,
+         home_team_id, away_team_id, home_score, away_score, situation_json, updated_at_utc)
+       values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+       on conflict(nfl_event_id, data_scope) do update set status = excluded.status,
+        status_detail = excluded.status_detail, period = excluded.period, clock = excluded.clock,
+        completed = excluded.completed, home_team_id = coalesce(excluded.home_team_id, nfl_event_snapshots.home_team_id),
+        away_team_id = coalesce(excluded.away_team_id, nfl_event_snapshots.away_team_id),
+        home_score = excluded.home_score, away_score = excluded.away_score,
+        situation_json = excluded.situation_json, updated_at_utc = excluded.updated_at_utc`,
+    ).bind(eventId, context.scope, state, string(statusType.detail) ?? string(statusType.description) ?? null,
+      integer(status.period), string(status.displayClock) ?? "0:00", statusType.completed === true ? 1 : 0,
+      homeTeamId ?? null, awayTeamId ?? null, homeScore, awayScore, null, context.now),
+  ]);
+  context.seen++;
+  context.written++;
+}
+
+async function coreStatus(competition: JsonObject): Promise<JsonObject> {
+  const direct = object(competition.status);
+  if (Object.keys(direct).length) return direct;
+  const ref = string(competition.$ref);
+  if (!ref) return {};
+  return (await fetchEspn(`${coreHttps(ref).replace(/\?.*$/, "")}/status?lang=en&region=us`)).payload;
+}
+
+async function coreScore(competitor: JsonObject): Promise<number> {
+  const score = object(competitor.score);
+  if (typeof score.value === "number") return Math.trunc(score.value);
+  const ref = string(score.$ref);
+  if (!ref) return 0;
+  const fetched = (await fetchEspn(coreHttps(ref))).payload;
+  return integer(fetched.value);
+}
+
+function teamIdFromCoreCompetitor(competitor: JsonObject): string | null {
+  const direct = string(competitor.id);
+  const ref = string(object(competitor.team).$ref);
+  const fromRef = ref?.match(/\/teams\/(\d+)(?:\?|$)/)?.[1];
+  const providerId = direct ?? fromRef;
+  return providerId ? `espn-team-${providerId}` : null;
+}
+
+function coreHttps(ref: string): string {
+  return ref.replace(/^http:\/\//i, "https://");
 }
 
 async function upsertTeam(context: SyncContext, team: JsonObject): Promise<string | undefined> {
@@ -550,19 +648,21 @@ async function ingestPlayerProjections(context: SyncContext, payload: JsonObject
     const position = positionFromFantasyPlayer(player);
     const providerTeamId = integer(player.proTeamId);
     const teamId = providerTeamId > 0 ? `espn-team-${providerTeamId}` : null;
+    const seasonOutlook = string(player.seasonOutlook) ?? null;
     statements.push(
       context.env.NFL_DB.prepare(
         `insert into nfl_players
           (nfl_player_id, display_name, position, current_team_id,
-           headshot_object_key, headshot_source_url, created_at_utc, updated_at_utc)
-         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+           headshot_object_key, headshot_source_url, season_outlook, created_at_utc, updated_at_utc)
+         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
          on conflict(nfl_player_id) do update set display_name = excluded.display_name,
           position = coalesce(excluded.position, nfl_players.position),
           current_team_id = coalesce(excluded.current_team_id, nfl_players.current_team_id),
           headshot_object_key = coalesce(excluded.headshot_object_key, nfl_players.headshot_object_key),
           headshot_source_url = coalesce(excluded.headshot_source_url, nfl_players.headshot_source_url),
+          season_outlook = coalesce(excluded.season_outlook, nfl_players.season_outlook),
           updated_at_utc = excluded.updated_at_utc`,
-      ).bind(playerId, displayName, position, teamId, null, null, context.now),
+      ).bind(playerId, displayName, position, teamId, null, null, seasonOutlook, context.now),
       context.env.NFL_DB.prepare(
         `insert into provider_player_mappings
           (provider, provider_player_id, nfl_player_id, created_at_utc)
@@ -571,7 +671,27 @@ async function ingestPlayerProjections(context: SyncContext, payload: JsonObject
     );
     for (const rawStat of array(player.stats)) {
       const stat = object(rawStat);
-      if (integer(stat.statSourceId) !== 1 || integer(stat.seasonId) !== seasonYear) continue;
+      const statSourceId = integer(stat.statSourceId);
+      const statSeasonYear = integer(stat.seasonId);
+      if (statSourceId === 0 && integer(stat.statSplitTypeId) === 0 && statSeasonYear > 0) {
+        const normalized = normalizeEspnSeasonStats(object(stat.stats));
+        if (Object.keys(normalized).length) {
+          statements.push(context.env.NFL_DB.prepare(
+            `insert into player_season_stats
+              (provider, season_year, provider_player_id, nfl_player_id, display_name,
+               team_id, position, stats_json, source_updated_at_utc, fetched_at_utc)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             on conflict(provider, season_year, provider_player_id) do update set
+              nfl_player_id = excluded.nfl_player_id, display_name = excluded.display_name,
+              team_id = excluded.team_id, position = excluded.position,
+              stats_json = excluded.stats_json, source_updated_at_utc = excluded.source_updated_at_utc,
+              fetched_at_utc = excluded.fetched_at_utc`,
+          ).bind(PROVIDER, statSeasonYear, providerPlayerId, playerId, displayName, teamId, position,
+            JSON.stringify(normalized), context.now, context.now));
+        }
+        continue;
+      }
+      if (statSourceId !== 1 || statSeasonYear !== seasonYear) continue;
       const splitType = integer(stat.statSplitTypeId);
       const scoringPeriod = integer(stat.scoringPeriodId);
       const projectionType = splitType === 0 ? "season" : splitType === 1 ? "weekly" : null;
@@ -628,6 +748,12 @@ export function normalizeEspnProjectionStats(stats: JsonObject): Record<string, 
   assignProjectionStat(normalized, "defense:INT", stats["100"]);
   assignProjectionStat(normalized, "defense:FR", stats["101"]);
   assignProjectionStat(normalized, "defense:TD", stats["102"]);
+  return normalized;
+}
+
+export function normalizeEspnSeasonStats(stats: JsonObject): Record<string, number> {
+  const normalized = normalizeEspnProjectionStats(stats);
+  assignProjectionStat(normalized, "games:GP", stats["210"]);
   return normalized;
 }
 

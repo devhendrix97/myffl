@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeEspnProjectionStats } from "./provider";
+import { normalizeEspnProjectionStats, normalizeEspnSeasonStats } from "./provider";
 
 describe("ESPN projection normalization", () => {
   it("maps core projected player stat ids into scoring-engine provider keys", () => {
@@ -47,6 +47,26 @@ describe("ESPN projection normalization", () => {
       "defense:INT": 0.8,
       "defense:FR": 0.6,
       "defense:TD": 0.2,
+    });
+  });
+
+  it("maps season history totals and games played", () => {
+    expect(normalizeEspnSeasonStats({
+      3: 3587,
+      4: 22,
+      20: 11,
+      23: 64,
+      24: 422,
+      25: 5,
+      210: 14,
+    })).toEqual({
+      "passing:YDS": 3587,
+      "passing:TD": 22,
+      "passing:INT": 11,
+      "rushing:ATT": 64,
+      "rushing:YDS": 422,
+      "rushing:TD": 5,
+      "games:GP": 14,
     });
   });
 });

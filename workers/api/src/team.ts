@@ -12,7 +12,7 @@ import { fantasyPositionSql, isFantasyPosition } from "./player-eligibility";
 interface RosterRow { fantasy_roster_player_id: string; nfl_player_id: string; position: string; }
 interface AssignmentRow extends RosterRow { slot_type: string; slot_index: number; }
 interface SlotRow { slot_type: string; display_name: string; slot_count: number; eligible_positions_json: string; contributes_points: number; }
-interface ProfileRow { nfl_player_id: string; display_name: string; position: string | null; abbreviation: string | null; current_team_id: string | null; headshot_object_key: string | null; logo_object_key: string | null; }
+interface ProfileRow { nfl_player_id: string; display_name: string; position: string | null; abbreviation: string | null; current_team_id: string | null; headshot_object_key: string | null; logo_object_key: string | null; season_outlook?: string | null; }
 
 export async function handleTeamRequest(request: Request, url: URL, env: Env, correlationId: string): Promise<HandlerResult<unknown> | undefined> {
   const match = url.pathname.match(/^\/api\/leagues\/([^/]+)\/(team|players)(?:\/([^/]+))?$/);
@@ -300,7 +300,7 @@ async function saveLineup(principal: AccessTokenPrincipal, db: D1Database, leagu
 }
 
 async function getPlayerProfile(principal: AccessTokenPrincipal, db: D1Database, _leagueId: string, seasonId: string, playerId: string, env: Env): Promise<PlayerProfileResponse> {
-  const profile = await env.NFL_DB.prepare("select players.nfl_player_id, players.display_name, players.position, teams.abbreviation, players.current_team_id, players.headshot_object_key, teams.logo_object_key from nfl_players players left join nfl_teams teams on teams.nfl_team_id = players.current_team_id where players.nfl_player_id = ?1").bind(playerId).first<ProfileRow>();
+  const profile = await env.NFL_DB.prepare("select players.nfl_player_id, players.display_name, players.position, teams.abbreviation, players.current_team_id, players.headshot_object_key, teams.logo_object_key, players.season_outlook from nfl_players players left join nfl_teams teams on teams.nfl_team_id = players.current_team_id where players.nfl_player_id = ?1").bind(playerId).first<ProfileRow>();
   if (!profile) throw new ApiException(404, "player_not_found", "Player not found.");
   const runtime = await getProviderRuntime(env);
   const [owner, ownTeam, watched, games, yearlyGames, injury, draft] = await Promise.all([
@@ -308,7 +308,7 @@ async function getPlayerProfile(principal: AccessTokenPrincipal, db: D1Database,
     db.prepare("select fantasy_team_id from fantasy_teams where league_season_id = ?1 and manager_user_id = ?2").bind(seasonId, principal.userId).first<{ fantasy_team_id: string }>(),
     db.prepare("select 1 as watched from player_watchlists where league_season_id = ?1 and user_id = ?2 and nfl_player_id = ?3").bind(seasonId, principal.userId, playerId).first(),
     env.NFL_DB.prepare("select nfl_event_id, stats_json from nfl_player_game_stats where nfl_player_id = ?1 and data_scope = ?2 order by source_updated_at_utc desc limit 8").bind(playerId, runtime.dataScope).all<{ nfl_event_id: string; stats_json: string }>(),
-    env.NFL_DB.prepare("select events.season_year, stats.stats_json from nfl_player_game_stats stats join nfl_events events on events.nfl_event_id = stats.nfl_event_id where stats.nfl_player_id = ?1 and stats.data_scope = ?2 order by events.season_year desc").bind(playerId, runtime.dataScope).all<{ season_year: number; stats_json: string }>(),
+    env.NFL_DB.prepare("select season_year, stats_json from player_season_stats where nfl_player_id = ?1 order by season_year desc").bind(playerId).all<{ season_year: number; stats_json: string }>(),
     env.NFL_DB.prepare("select status from nfl_player_injuries where nfl_player_id = ?1 and data_scope = ?2 order by updated_at_utc desc limit 1").bind(playerId, runtime.dataScope).first<{ status: string | null }>(),
     db.prepare("select status from drafts where league_season_id = ?1").bind(seasonId).first<{ status: string }>(),
   ]);
@@ -319,7 +319,7 @@ async function getPlayerProfile(principal: AccessTokenPrincipal, db: D1Database,
   } else if (isMine) actions.push("trade-away");
   else actions.push("trade-for");
   if (!draft || ["setup", "scheduled", "active", "paused"].includes(draft.status)) actions.push("draft-queue");
-  return { playerId, displayName: profile.display_name, position: profile.position ?? "UNK", nflTeam: profile.abbreviation ?? undefined, headshotUrl: espnAthleteHeadshotUrl(env, profile.nfl_player_id, profile.headshot_object_key), nflTeamLogoUrl: providerAssetUrl(env, profile.logo_object_key), injuryStatus: injury?.status ?? undefined, rosteredByTeamId: owner?.fantasy_team_id, rosteredByTeamName: owner?.team_name, watched: Boolean(watched), availableActions: actions, yearlyStats: yearlyStats(yearlyGames.results ?? []), recentGames: (games.results ?? []).map((game) => ({ eventId: game.nfl_event_id, stats: parseObject(game.stats_json) })) };
+  return { playerId, displayName: profile.display_name, position: profile.position ?? "UNK", nflTeam: profile.abbreviation ?? undefined, headshotUrl: espnAthleteHeadshotUrl(env, profile.nfl_player_id, profile.headshot_object_key), nflTeamLogoUrl: providerAssetUrl(env, profile.logo_object_key), injuryStatus: injury?.status ?? undefined, rosteredByTeamId: owner?.fantasy_team_id, rosteredByTeamName: owner?.team_name, seasonOutlook: profile.season_outlook ?? undefined, watched: Boolean(watched), availableActions: actions, yearlyStats: yearlyStats(yearlyGames.results ?? []), recentGames: (games.results ?? []).map((game) => ({ eventId: game.nfl_event_id, stats: parseObject(game.stats_json) })) };
 }
 
 async function setWatched(db: D1Database, seasonId: string, userId: string, playerId: string, watched: boolean): Promise<void> { if (watched) await db.prepare("insert into player_watchlists (player_watchlist_id, league_season_id, user_id, nfl_player_id, created_at_utc) values (?1, ?2, ?3, ?4, ?5) on conflict(league_season_id, user_id, nfl_player_id) do nothing").bind(newId("pwl"), seasonId, userId, playerId, new Date().toISOString()).run(); else await db.prepare("delete from player_watchlists where league_season_id = ?1 and user_id = ?2 and nfl_player_id = ?3").bind(seasonId, userId, playerId).run(); }
@@ -369,6 +369,9 @@ function yearlyStats(rows: Array<{ season_year: number; stats_json: string }>): 
     }
     bySeason.set(row.season_year, bucket);
   }
-  return [...bySeason.entries()].sort((a, b) => b[0] - a[0]).map(([seasonYear, value]) => ({ seasonYear, games: value.games, stats: value.totals }));
+  return [...bySeason.entries()].sort((a, b) => b[0] - a[0]).map(([seasonYear, value]) => {
+    const games = Number(value.totals["games:GP"] ?? value.games);
+    return { seasonYear, games: Number.isFinite(games) ? games : value.games, stats: value.totals };
+  });
 }
 function chunks<T>(values: T[], size: number): T[][] { const result: T[][] = []; for (let index = 0; index < values.length; index += size) result.push(values.slice(index, index + size)); return result; }
