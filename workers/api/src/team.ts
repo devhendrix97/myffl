@@ -6,6 +6,7 @@ import { getProviderRuntime } from "./game-feed";
 import { newId, type AccessTokenPrincipal } from "./security";
 import { rankingContext, rankingsForPlayers } from "./fantasypros";
 import { espnAthleteHeadshotUrl, providerAssetUrl } from "./assets";
+import { loadRemainingAverageProjectionPoints, loadUpcomingProjectionWeek, loadWeeklyProjectionPoints } from "./projections";
 
 interface RosterRow { fantasy_roster_player_id: string; nfl_player_id: string; position: string; }
 interface AssignmentRow extends RosterRow { slot_type: string; slot_index: number; }
@@ -68,6 +69,7 @@ async function getTeamLineup(principal: AccessTokenPrincipal, db: D1Database, le
   const locks = await loadLocks(env.NFL_DB, rows.map((row) => row.nfl_player_id), week, runtime.dataScope);
   const injuries = await loadInjuries(env.NFL_DB, rows.map((row) => row.nfl_player_id), runtime.dataScope);
   const points = await loadFantasyPoints(db, env.NFL_DB, seasonId, rows.map((row) => row.nfl_player_id), week, runtime.dataScope);
+  const projectedPoints = await loadWeeklyProjectionPoints(db, env.NFL_DB, seasonId, rows.map((row) => row.nfl_player_id), week);
   const eligible = slotEligibility(slots);
   const occupied = new Set(rows.map((row) => `${row.slot_type}:${row.slot_index}`));
   const emptySlots = expandSlots(slots).filter((slot) => !occupied.has(`${slot.slotType}:${slot.slotIndex}`)).map(({ slotType, slotIndex, displayName }) => ({ slotType, slotIndex, displayName }));
@@ -85,6 +87,7 @@ async function getTeamLineup(principal: AccessTokenPrincipal, db: D1Database, le
         eligibleSlots: [...(eligible.get(row.position) ?? []), "BENCH", "IR"].filter((value, index, array) => array.indexOf(value) === index),
         locked: Boolean(lock?.locked), locksAtUtc: lock?.startsAt,
         fantasyPoints: points.get(row.nfl_player_id),
+        projectedPoints: projectedPoints.get(row.nfl_player_id),
       };
     }),
     emptySlots,
@@ -119,30 +122,35 @@ async function searchPlayers(principal: AccessTokenPrincipal, db: D1Database, se
   if (!allProfiles.length) return [];
   const ids = allProfiles.map((profile) => profile.nfl_player_id);
   const runtime = await getProviderRuntime(env);
-  const [owners, watches, injuries] = await Promise.all([
+  const projectionWeek = await loadUpcomingProjectionWeek(env.NFL_DB, ranking.seasonYear);
+  const [owners, watches, injuries, weeklyProjectionPoints, remainingAverageProjectionPoints] = await Promise.all([
     loadOwners(db, seasonId, ids),
     loadWatches(db, seasonId, principal.userId, ids),
     loadInjuries(env.NFL_DB, ids, runtime.dataScope),
+    loadWeeklyProjectionPoints(db, env.NFL_DB, seasonId, ids, projectionWeek),
+    loadRemainingAverageProjectionPoints(db, env.NFL_DB, seasonId, ids, projectionWeek),
   ]);
   const ownerMap = new Map(owners.map((owner) => [owner.nfl_player_id, owner]));
   const watched = new Set(watches);
   const profiles = allProfiles
     .filter((profile) => !watchedOnly || watched.has(profile.nfl_player_id))
     .filter((profile) => !availableOnly || !ownerMap.has(profile.nfl_player_id))
-    .sort((left, right) => comparePlayers(left, right, sort, rankings))
+    .sort((left, right) => comparePlayers(left, right, sort, rankings, weeklyProjectionPoints, remainingAverageProjectionPoints))
     .slice(0, limit);
   return profiles.map((profile) => {
     const owner = ownerMap.get(profile.nfl_player_id);
     const expert = rankings.get(profile.nfl_player_id);
-    return { playerId: profile.nfl_player_id, displayName: profile.display_name, position: profile.position ?? "UNK", nflTeam: profile.abbreviation ?? undefined, headshotUrl: espnAthleteHeadshotUrl(env, profile.nfl_player_id, profile.headshot_object_key), nflTeamLogoUrl: providerAssetUrl(env, profile.logo_object_key), injuryStatus: injuries.get(profile.nfl_player_id), rosteredByTeamId: owner?.fantasy_team_id, rosteredByTeamName: owner?.team_name, watched: watched.has(profile.nfl_player_id), expertConsensusRank: expert?.overallRank, positionRank: expert?.positionRank, tier: expert?.tier, byeWeek: expert?.byeWeek, rankingUpdatedAt: expert?.sourceUpdatedAt ?? expert?.fetchedAtUtc };
+    return { playerId: profile.nfl_player_id, displayName: profile.display_name, position: profile.position ?? "UNK", nflTeam: profile.abbreviation ?? undefined, headshotUrl: espnAthleteHeadshotUrl(env, profile.nfl_player_id, profile.headshot_object_key), nflTeamLogoUrl: providerAssetUrl(env, profile.logo_object_key), injuryStatus: injuries.get(profile.nfl_player_id), rosteredByTeamId: owner?.fantasy_team_id, rosteredByTeamName: owner?.team_name, watched: watched.has(profile.nfl_player_id), expertConsensusRank: expert?.overallRank, positionRank: expert?.positionRank, tier: expert?.tier, byeWeek: expert?.byeWeek, rankingUpdatedAt: expert?.sourceUpdatedAt ?? expert?.fetchedAtUtc, projectedPoints: weeklyProjectionPoints.get(profile.nfl_player_id), remainingAverageProjectedPoints: remainingAverageProjectionPoints.get(profile.nfl_player_id) };
   });
 }
 
-function comparePlayers(left: ProfileRow, right: ProfileRow, sort: string, rankings: Map<string, { overallRank?: number }>): number {
+function comparePlayers(left: ProfileRow, right: ProfileRow, sort: string, rankings: Map<string, { overallRank?: number }>, weeklyProjectionPoints: Map<string, number>, remainingAverageProjectionPoints: Map<string, number>): number {
   if (sort === "name-desc") return right.display_name.localeCompare(left.display_name);
   if (sort === "team") return (left.abbreviation ?? "ZZZ").localeCompare(right.abbreviation ?? "ZZZ") || left.display_name.localeCompare(right.display_name);
   if (sort === "position") return (left.position ?? "ZZZ").localeCompare(right.position ?? "ZZZ") || (rankings.get(left.nfl_player_id)?.overallRank ?? 99999) - (rankings.get(right.nfl_player_id)?.overallRank ?? 99999) || left.display_name.localeCompare(right.display_name);
   if (sort === "rank") return (rankings.get(left.nfl_player_id)?.overallRank ?? 99999) - (rankings.get(right.nfl_player_id)?.overallRank ?? 99999) || left.display_name.localeCompare(right.display_name);
+  if (sort === "projected-week") return (weeklyProjectionPoints.get(right.nfl_player_id) ?? -9999) - (weeklyProjectionPoints.get(left.nfl_player_id) ?? -9999) || left.display_name.localeCompare(right.display_name);
+  if (sort === "projected-remaining-average") return (remainingAverageProjectionPoints.get(right.nfl_player_id) ?? -9999) - (remainingAverageProjectionPoints.get(left.nfl_player_id) ?? -9999) || left.display_name.localeCompare(right.display_name);
   return left.display_name.localeCompare(right.display_name);
 }
 
@@ -197,7 +205,7 @@ async function optimizeLineup(principal: AccessTokenPrincipal, db: D1Database, l
     occupied.add(`${player.slotType}:${player.slotIndex}`);
   }
   const availableSlots = slots.filter((slot) => !occupied.has(`${slot.slotType}:${slot.slotIndex}`));
-  const unlocked = lineup.players.filter((player) => !player.locked).sort((left, right) => (right.fantasyPoints ?? 0) - (left.fantasyPoints ?? 0) || left.displayName.localeCompare(right.displayName));
+  const unlocked = lineup.players.filter((player) => !player.locked).sort((left, right) => (right.projectedPoints ?? right.fantasyPoints ?? 0) - (left.projectedPoints ?? left.fantasyPoints ?? 0) || left.displayName.localeCompare(right.displayName));
   const scoringSlots = availableSlots.filter((slot) => slot.contributesPoints);
   for (const slot of scoringSlots) {
     const playerIndex = unlocked.findIndex((player) => !assigned.has(player.rosterPlayerId) && slot.eligiblePositions.includes(player.position));

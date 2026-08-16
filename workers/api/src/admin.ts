@@ -88,7 +88,8 @@ function providerJob(resource: string | undefined): ProviderJob {
   if (!resource || resource === "scoreboard") return { type: "sync-scoreboard" };
   if (resource === "teams") return { type: "sync-teams" };
   if (resource === "injuries") return { type: "sync-injuries" };
-  throw new ApiException(400, "invalid_provider_resource", "Resource must be scoreboard, teams, or injuries.");
+  if (resource === "projections") return { type: "sync-projections" };
+  throw new ApiException(400, "invalid_provider_resource", "Resource must be scoreboard, teams, injuries, or projections.");
 }
 
 async function providerDashboard(env: Env): Promise<unknown> {
@@ -109,6 +110,7 @@ async function providerDashboard(env: Env): Promise<unknown> {
       `select
         (select count(*) from nfl_teams) as teams,
         (select count(*) from nfl_players) as players,
+        (select count(*) from player_projections where provider = 'espn') as projections,
         (select count(*) from nfl_events) as events,
         (select count(*) from nfl_player_injuries where data_scope = 'production') as injuries,
         (select count(*) from provider_raw_archives) as archives`,

@@ -4,14 +4,15 @@ import type { ScoringJob } from "./score-processing";
 const PROVIDER = "espn";
 const PARSER_VERSION = "espn-nfl-1.0.0";
 const PRODUCTION_SCOPE = "production";
-const MAX_PAYLOAD_BYTES = 12 * 1024 * 1024;
+const MAX_PAYLOAD_BYTES = 20 * 1024 * 1024;
 const PROVIDER_ASSET_PREFIX = "provider-assets/espn/nfl";
 
 export type ProviderJob =
   | { type: "sync-teams" }
   | { type: "sync-scoreboard"; date?: string }
   | { type: "sync-injuries" }
-  | { type: "sync-summary"; eventId: string; dataScope?: string };
+  | { type: "sync-summary"; eventId: string; dataScope?: string }
+  | { type: "sync-projections"; seasonYear?: number };
 
 type JsonObject = Record<string, unknown>;
 
@@ -51,13 +52,24 @@ export async function enqueueScheduledProviderWork(env: Env): Promise<void> {
     `select
       (select count(*) from nfl_teams) as teamCount,
       (select count(*) from nfl_teams where logo_object_key is null) as teamsMissingLogos,
-      (select count(*) from nfl_player_injuries where data_scope = 'production') as injuryCount`,
-  ).first<{ teamCount: number; teamsMissingLogos: number; injuryCount: number }>();
+      (select count(*) from nfl_player_injuries where data_scope = 'production') as injuryCount,
+      (select count(*) from player_projections where provider = 'espn' and season_year = ?1) as projectionCount`,
+  ).bind(now.getUTCFullYear()).first<{ teamCount: number; teamsMissingLogos: number; injuryCount: number; projectionCount: number }>();
   if ((bootstrap?.teamCount ?? 0) < 32 || (bootstrap?.teamsMissingLogos ?? 0) > 0) jobs.push({ type: "sync-teams" });
   if ((bootstrap?.injuryCount ?? 0) === 0) jobs.push({ type: "sync-injuries" });
+  if ((bootstrap?.projectionCount ?? 0) < 100) {
+    const lastProjectionAttempt = await env.NFL_DB.prepare(
+      "select last_attempt_at_utc from provider_sync_state where provider = 'espn' and resource = 'projections' and data_scope = 'production'",
+    ).first<{ last_attempt_at_utc: string | null }>();
+    const lastAttempt = lastProjectionAttempt?.last_attempt_at_utc ? Date.parse(lastProjectionAttempt.last_attempt_at_utc) : 0;
+    if (now.getTime() - lastAttempt >= 24 * 60 * 60_000) jobs.push({ type: "sync-projections", seasonYear: now.getUTCFullYear() });
+  }
   if (now.getUTCHours() === 8 && now.getUTCMinutes() === 0) jobs.push({ type: "sync-injuries" });
   if (now.getUTCDay() === 2 && now.getUTCHours() === 9 && now.getUTCMinutes() === 0) {
     jobs.push({ type: "sync-teams" });
+  }
+  if (now.getUTCDay() === 2 && now.getUTCHours() === 15 && now.getUTCMinutes() === 0) {
+    jobs.push({ type: "sync-projections", seasonYear: now.getUTCFullYear() });
   }
   const uniqueJobs = jobs.filter((job, index) => jobs.findIndex((candidate) => candidate.type === job.type) === index);
   if (uniqueJobs.length) await env.ESPN_UPDATES_QUEUE.sendBatch(uniqueJobs.map((body) => ({ body })));
@@ -108,6 +120,15 @@ export async function runProviderJob(env: Env, job: ProviderJob): Promise<void> 
     });
     return;
   }
+  if (job.type === "sync-projections") {
+    await withSyncRun(env, "projections", PRODUCTION_SCOPE, async (context) => {
+      const seasonYear = job.seasonYear ?? new Date().getUTCFullYear();
+      const result = await fetchEspnFantasyPlayers(seasonYear);
+      await archive(context, result.raw, String(seasonYear));
+      await ingestPlayerProjections(context, result.payload, seasonYear);
+    });
+    return;
+  }
   await withSyncRun(env, "scoreboard", PRODUCTION_SCOPE, async (context) => {
     const suffix = job.date ? `?dates=${encodeURIComponent(job.date)}&limit=100` : "?limit=100";
     const result = await fetchEspn(`https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard${suffix}`);
@@ -119,6 +140,31 @@ export async function runProviderJob(env: Env, job: ProviderJob): Promise<void> 
       })));
     }
   });
+}
+
+async function fetchEspnFantasyPlayers(seasonYear: number): Promise<FetchResult> {
+  const url = `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${encodeURIComponent(String(seasonYear))}/players?view=kona_player_info`;
+  const response = await fetch(url, {
+    headers: {
+      accept: "application/json",
+      "user-agent": "myFFL/0.5 provider-ingestion (+https://myfflapp.com)",
+      "x-fantasy-filter": JSON.stringify({
+        players: {
+          limit: 2000,
+          sortPercOwned: { sortPriority: 1, sortAsc: false },
+        },
+      }),
+    },
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) throw new Error(`ESPN fantasy players returned ${response.status} for ${url}`);
+  const declaredLength = Number(response.headers.get("content-length") ?? 0);
+  if (declaredLength > MAX_PAYLOAD_BYTES) throw new Error(`ESPN fantasy players payload exceeded ${MAX_PAYLOAD_BYTES} bytes`);
+  const bytes = await response.arrayBuffer();
+  if (bytes.byteLength > MAX_PAYLOAD_BYTES) throw new Error(`ESPN fantasy players payload exceeded ${MAX_PAYLOAD_BYTES} bytes`);
+  const raw = new TextDecoder().decode(bytes);
+  const parsed: unknown = JSON.parse(raw);
+  return { payload: Array.isArray(parsed) ? { players: parsed } : object(parsed), raw, sourceUrl: url };
 }
 
 async function fetchEspn(url: string): Promise<FetchResult> {
@@ -490,6 +536,120 @@ async function ingestInjuries(context: SyncContext, payload: JsonObject): Promis
     }
   }
   if (statements.length) await context.env.NFL_DB.batch(statements);
+}
+
+async function ingestPlayerProjections(context: SyncContext, payload: JsonObject, seasonYear: number): Promise<void> {
+  let statements: D1PreparedStatement[] = [];
+  let projections = 0;
+  for (const rawPlayer of array(payload.players)) {
+    const player = object(rawPlayer);
+    const providerPlayerId = string(player.id);
+    if (!providerPlayerId) { warn(context, "players[].id", "Projected player did not include an id"); continue; }
+    const playerId = `espn-player-${providerPlayerId}`;
+    const displayName = string(player.fullName) ?? string(player.displayName) ?? string(player.name) ?? `ESPN Player ${providerPlayerId}`;
+    const position = positionFromFantasyPlayer(player);
+    const providerTeamId = integer(player.proTeamId);
+    const teamId = providerTeamId > 0 ? `espn-team-${providerTeamId}` : null;
+    statements.push(
+      context.env.NFL_DB.prepare(
+        `insert into nfl_players
+          (nfl_player_id, display_name, position, current_team_id,
+           headshot_object_key, headshot_source_url, created_at_utc, updated_at_utc)
+         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+         on conflict(nfl_player_id) do update set display_name = excluded.display_name,
+          position = coalesce(excluded.position, nfl_players.position),
+          current_team_id = coalesce(excluded.current_team_id, nfl_players.current_team_id),
+          headshot_object_key = coalesce(excluded.headshot_object_key, nfl_players.headshot_object_key),
+          headshot_source_url = coalesce(excluded.headshot_source_url, nfl_players.headshot_source_url),
+          updated_at_utc = excluded.updated_at_utc`,
+      ).bind(playerId, displayName, position, teamId, null, null, context.now),
+      context.env.NFL_DB.prepare(
+        `insert into provider_player_mappings
+          (provider, provider_player_id, nfl_player_id, created_at_utc)
+         values (?1, ?2, ?3, ?4) on conflict(provider, provider_player_id) do nothing`,
+      ).bind(PROVIDER, providerPlayerId, playerId, context.now),
+    );
+    for (const rawStat of array(player.stats)) {
+      const stat = object(rawStat);
+      if (integer(stat.statSourceId) !== 1 || integer(stat.seasonId) !== seasonYear) continue;
+      const splitType = integer(stat.statSplitTypeId);
+      const scoringPeriod = integer(stat.scoringPeriodId);
+      const projectionType = splitType === 0 ? "season" : splitType === 1 ? "weekly" : null;
+      if (!projectionType) continue;
+      const weekNumber = projectionType === "weekly" ? scoringPeriod : 0;
+      if (projectionType === "weekly" && (weekNumber < 1 || weekNumber > 22)) continue;
+      const normalized = normalizeEspnProjectionStats(object(stat.stats));
+      if (!Object.keys(normalized).length) continue;
+      statements.push(context.env.NFL_DB.prepare(
+        `insert into player_projections
+          (provider, season_year, projection_type, week_number, provider_player_id, nfl_player_id,
+           display_name, team_id, position, projected_stats_json, source_updated_at_utc, fetched_at_utc)
+         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+         on conflict(provider, season_year, projection_type, week_number, provider_player_id) do update set
+          nfl_player_id = excluded.nfl_player_id, display_name = excluded.display_name,
+          team_id = excluded.team_id, position = excluded.position,
+          projected_stats_json = excluded.projected_stats_json,
+          source_updated_at_utc = excluded.source_updated_at_utc,
+          fetched_at_utc = excluded.fetched_at_utc`,
+      ).bind(PROVIDER, seasonYear, projectionType, weekNumber, providerPlayerId, playerId, displayName,
+        teamId, position, JSON.stringify(normalized), context.now, context.now));
+      projections++;
+    }
+    context.seen++;
+    if (statements.length >= 90) {
+      await context.env.NFL_DB.batch(statements);
+      statements = [];
+    }
+  }
+  if (statements.length) await context.env.NFL_DB.batch(statements);
+  await context.env.NFL_DB.prepare(
+    "delete from player_projections where provider = 'espn' and season_year = ?1 and fetched_at_utc <> ?2",
+  ).bind(seasonYear, context.now).run();
+  context.written += projections;
+}
+
+export function normalizeEspnProjectionStats(stats: JsonObject): Record<string, number> {
+  const normalized: Record<string, number> = {};
+  assignProjectionStat(normalized, "passing:ATT", stats["0"]);
+  assignProjectionStat(normalized, "passing:CMP", stats["1"]);
+  assignProjectionStat(normalized, "passing:YDS", stats["3"]);
+  assignProjectionStat(normalized, "passing:TD", stats["4"]);
+  assignProjectionStat(normalized, "passing:INT", stats["20"]);
+  assignProjectionStat(normalized, "rushing:ATT", stats["23"]);
+  assignProjectionStat(normalized, "rushing:YDS", stats["24"]);
+  assignProjectionStat(normalized, "rushing:TD", stats["25"]);
+  assignProjectionStat(normalized, "receiving:YDS", stats["42"]);
+  assignProjectionStat(normalized, "receiving:TD", stats["43"]);
+  assignProjectionStat(normalized, "receiving:REC", stats["53"]);
+  assignProjectionStat(normalized, "fumbles:LOST", stats["72"]);
+  assignProjectionStat(normalized, "kicking:FG", stats["83"]);
+  assignProjectionStat(normalized, "kicking:XP", stats["86"]);
+  assignProjectionStat(normalized, "defense:SACKS", stats["99"]);
+  assignProjectionStat(normalized, "defense:INT", stats["100"]);
+  assignProjectionStat(normalized, "defense:FR", stats["101"]);
+  assignProjectionStat(normalized, "defense:TD", stats["102"]);
+  return normalized;
+}
+
+function assignProjectionStat(stats: Record<string, number>, key: string, value: unknown): void {
+  const parsed = numberValue(value);
+  if (parsed !== undefined) stats[key] = parsed;
+}
+
+function numberValue(value: unknown): number | undefined {
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number.parseFloat(value.replaceAll(",", ""));
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function positionFromFantasyPlayer(player: JsonObject): string | null {
+  const abbreviation = string(object(player.position).abbreviation) ?? string(player.defaultPosition);
+  if (abbreviation) return abbreviation.toUpperCase();
+  const defaultPositionId = integer(player.defaultPositionId);
+  return ({ 1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K", 16: "DST" } as Record<number, string>)[defaultPositionId] ?? null;
 }
 
 function warn(context: SyncContext, path: string, message: string): undefined {

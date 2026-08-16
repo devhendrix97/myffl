@@ -1,12 +1,10 @@
-import type { ScoringCalculationType } from "@myffl/api-contracts";
 import {
   calculatePlayerScore,
   SCORING_CALCULATION_VERSION,
-  type EngineRule,
-  type EngineTier,
   type ScoreCalculation,
 } from "./scoring-engine";
 import { refreshLeagueWeek } from "./matchups";
+import { loadScoringRules } from "./scoring-rules";
 
 export type ScoringJob =
   | { type: "score-event"; eventId: string; dataScope: string; sourceUpdatedAtUtc: string }
@@ -44,22 +42,6 @@ interface ScoreRow {
   total_points_milli: number;
   input_hash: string;
   revision_number: number;
-}
-
-interface RuleRow {
-  scoring_rule_id: string;
-  statistic_key: string;
-  display_name: string;
-  enabled: number;
-  calculation_type: ScoringCalculationType;
-  point_value_milli: number;
-  increment_value: string | null;
-  threshold_value: string | null;
-  position_filter: string | null;
-  positions_json: string;
-  max_awards: number | null;
-  tiers_json: string;
-  display_order: number;
 }
 
 export async function processScoringQueue(batch: MessageBatch<ScoringJob>, env: Env): Promise<void> {
@@ -154,7 +136,7 @@ async function scoreEventForSeason(
   completed: boolean,
 ): Promise<number> {
   const [rules, stats] = await Promise.all([
-    loadRules(env.LEAGUE_DB_001, season.scoring_version_id),
+    loadScoringRules(env.LEAGUE_DB_001, season.scoring_version_id),
     env.NFL_DB.prepare(
       `select nfl_player_id, position, stats_json, source_updated_at_utc
        from nfl_player_game_stats where nfl_event_id = ?1 and data_scope = ?2`,
@@ -245,31 +227,6 @@ async function persistPlayerScore(
   await db.batch(statements);
 }
 
-async function loadRules(db: D1Database, versionId: string): Promise<EngineRule[]> {
-  const result = await db.prepare(
-    `select rules.scoring_rule_id, rules.statistic_key, details.display_name, rules.enabled,
-            rules.calculation_type, rules.point_value_milli, rules.increment_value,
-            rules.threshold_value, rules.position_filter, details.positions_json,
-            rules.max_awards, details.tiers_json, rules.display_order
-     from scoring_rules rules join scoring_rule_details details on details.scoring_rule_id = rules.scoring_rule_id
-     where rules.scoring_version_id = ?1 order by rules.display_order`,
-  ).bind(versionId).all<RuleRow>();
-  return (result.results ?? []).map((row) => ({
-    scoringRuleId: row.scoring_rule_id,
-    statisticKey: row.statistic_key,
-    displayName: row.display_name,
-    enabled: Boolean(row.enabled),
-    calculationType: row.calculation_type,
-    pointValueMilli: row.point_value_milli,
-    incrementValue: row.increment_value ?? undefined,
-    thresholdValue: row.threshold_value ?? undefined,
-    positions: parseArray<string>(row.positions_json || row.position_filter || "[]"),
-    maxAwards: row.max_awards ?? undefined,
-    tiers: parseArray<EngineTier>(row.tiers_json),
-    displayOrder: row.display_order,
-  }));
-}
-
 async function withReceipt(
   db: D1Database,
   key: string,
@@ -309,15 +266,6 @@ function parseObject(value: string): Record<string, unknown> {
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
   } catch {
     return {};
-  }
-}
-
-function parseArray<T>(value: string): T[] {
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed as T[] : [];
-  } catch {
-    return [];
   }
 }
 

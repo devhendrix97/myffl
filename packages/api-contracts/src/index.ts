@@ -385,6 +385,7 @@ export interface DraftPlayerView {
   tier?: number;
   byeWeek?: number;
   rankingUpdatedAt?: string;
+  averageProjectedPointsPerGame?: number;
 }
 
 export interface DraftRoomResponse {
@@ -439,6 +440,7 @@ export interface TeamPlayerView {
   locked: boolean;
   locksAtUtc?: string;
   fantasyPoints?: number;
+  projectedPoints?: number;
 }
 
 export interface TeamLineupResponse {
@@ -497,6 +499,8 @@ export interface LeaguePlayerSearchItem {
   tier?: number;
   byeWeek?: number;
   rankingUpdatedAt?: string;
+  projectedPoints?: number;
+  remainingAverageProjectedPoints?: number;
 }
 
 export interface FantasyProsRankingsResponse {
