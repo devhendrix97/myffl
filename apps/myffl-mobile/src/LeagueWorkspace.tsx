@@ -110,6 +110,8 @@ interface ApiEnvelope<T> {
 interface SimulationGame {
   eventId: string; status: string; statusDetail: string; period: number; clock: string;
   homeScore: number; awayScore: number; homeTeam: string; awayTeam: string;
+  homeTeamName?: string; awayTeamName?: string; seasonYear?: number; seasonType?: number; week?: number;
+  startsAtUtc?: string; completed?: boolean;
 }
 interface SimulationPlay {
   playId: string; sequenceNumber: number; driveId: string; period: number; clock: string;
@@ -124,6 +126,8 @@ interface SimulationPlayer {
 interface GameFeed {
   games: SimulationGame[]; players: SimulationPlayer[]; plays: SimulationPlay[]; currentPlay: SimulationPlay | null;
   scoring: { leagueId: string; leagueName: string; versionNumber: number } | null;
+  weeks?: Array<{ seasonYear: number; seasonType: number; week: number; label: string; key: string }>;
+  selectedWeek?: { seasonYear: number; seasonType: number; week: number; label: string; key: string } | null;
 }
 
 class LeagueApiError extends Error {
@@ -378,40 +382,55 @@ function GameCenterView({ accessToken, leagues }: { accessToken: string; leagues
   const [dashboard, setDashboard] = useState<GameFeed | null>(null);
   const [error, setError] = useState("");
   const [leagueId, setLeagueId] = useState(leagues[0]?.leagueId ?? "");
+  const [weekKey, setWeekKey] = useState("");
 
   useEffect(() => {
     let active = true;
     async function refresh() {
       try {
-        const query = leagueId ? `?leagueId=${encodeURIComponent(leagueId)}` : "";
+        const params = new URLSearchParams();
+        if (leagueId) params.set("leagueId", leagueId);
+        if (weekKey) params.set("weekKey", weekKey);
+        const query = params.toString() ? `?${params}` : "";
         const next = await leagueRequest<GameFeed>(`/api/games/current${query}`, accessToken);
-        if (active) { setDashboard(next); setError(""); }
+        if (active) {
+          setDashboard(next);
+          setWeekKey((current) => current || next.selectedWeek?.key || next.weeks?.[0]?.key || "");
+          setError("");
+        }
       } catch (requestError) {
         if (active) setError(requestError instanceof Error ? requestError.message : "Unable to load Game Center.");
       }
     }
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 1500);
+    const timer = window.setInterval(() => void refresh(), 30000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [accessToken, leagueId]);
+  }, [accessToken, leagueId, weekKey]);
 
-  const game = dashboard?.games[0];
+  const loadedDashboard = dashboard;
+  const game = loadedDashboard?.games.find((item) => item.status !== "post") ?? loadedDashboard?.games[0];
   return (
     <div className="league-page live-test-page">
-      <header className="page-heading"><div><p className="eyebrow">NFL live data</p><h1>Game center</h1></div><div className="game-center-controls">{leagues.length > 0 && <label><span>Scoring for</span><select value={leagueId} onChange={(event) => setLeagueId(event.target.value)}>{leagues.map((league) => <option key={league.leagueId} value={league.leagueId}>{league.leagueName}</option>)}</select></label>}{game && <span className={`test-run-state ${game.status}`}>{game.status === "post" ? "final" : game.statusDetail}</span>}</div></header>
+      <header className="page-heading"><div><p className="eyebrow">NFL schedule and scores</p><h1>Game center</h1></div><div className="game-center-controls">{leagues.length > 0 && <label><span>Scoring for</span><select value={leagueId} onChange={(event) => setLeagueId(event.target.value)}>{leagues.map((league) => <option key={league.leagueId} value={league.leagueId}>{league.leagueName}</option>)}</select></label>}{Boolean(dashboard?.weeks?.length) && <label><span>NFL week</span><select value={weekKey || dashboard?.selectedWeek?.key || ""} onChange={(event) => setWeekKey(event.target.value)}>{dashboard!.weeks!.map((week) => <option key={week.key} value={week.key}>{week.label}</option>)}</select></label>}{game && <span className={`test-run-state ${game.status}`}>{game.status === "post" ? "final" : game.statusDetail}</span>}</div></header>
       {error && <InlineAlert message={error} onClose={() => setError("")} />}
-      {!game ? (
-        <section className="test-empty"><Activity size={32}/><h2>No active game data</h2><p>Scheduled and live NFL games will appear here.</p></section>
+      {!loadedDashboard || !game ? (
+        <section className="test-empty"><Activity size={32}/><h2>No NFL games found</h2><p>Scheduled, live, and final games will appear here after the schedule is ingested.</p></section>
       ) : <>
         <section className="test-scoreboard">
           <div><span className="test-team-mark away">{game.awayTeam}</span><strong>{game.awayScore}</strong></div>
-          <section><span>{game.status === "post" ? "FINAL" : game.statusDetail}</span><b>{game.clock}</b><small>{game.status === "pre" ? "Scheduled" : "Game in progress"}</small></section>
+          <section><span>{game.status === "post" ? "FINAL" : game.statusDetail}</span><b>{game.status === "pre" ? formatGameTime(game.startsAtUtc) : game.clock}</b><small>{game.status === "pre" ? "Scheduled" : game.status === "post" ? "Final score" : "Game in progress"}</small></section>
           <div><strong>{game.homeScore}</strong><span className="test-team-mark home">{game.homeTeam}</span></div>
         </section>
-        {dashboard.currentPlay && <section className={`current-play ${dashboard.currentPlay.scoringPlay ? "score" : ""}`}><p>Q{dashboard.currentPlay.period} {dashboard.currentPlay.clock} · {dashboard.currentPlay.playType}</p><strong>{dashboard.currentPlay.playText}</strong><span>{dashboard.currentPlay.awayScore} - {dashboard.currentPlay.homeScore}</span></section>}
+        <section className="nfl-game-list">{loadedDashboard.games.map((item) => <article className={`nfl-game-card ${item.status}`} key={item.eventId}>
+          <span><b>{item.awayTeam}</b><small>{item.awayTeamName}</small></span>
+          <strong>{item.status === "pre" ? "at" : `${item.awayScore} - ${item.homeScore}`}</strong>
+          <span><b>{item.homeTeam}</b><small>{item.homeTeamName}</small></span>
+          <time>{item.status === "pre" ? formatGameTime(item.startsAtUtc) : item.status === "post" ? "Final" : item.statusDetail}</time>
+        </article>)}</section>
+        {loadedDashboard.currentPlay && <section className={`current-play ${loadedDashboard.currentPlay.scoringPlay ? "score" : ""}`}><p>Q{loadedDashboard.currentPlay.period} {loadedDashboard.currentPlay.clock} · {loadedDashboard.currentPlay.playType}</p><strong>{loadedDashboard.currentPlay.playText}</strong><span>{loadedDashboard.currentPlay.awayScore} - {loadedDashboard.currentPlay.homeScore}</span></section>}
         <div className="test-game-grid">
-          <section className="test-data-section"><div className="section-heading"><div><p className="eyebrow">{dashboard.scoring ? `${dashboard.scoring.leagueName} - scoring v${dashboard.scoring.versionNumber}` : "Provider box score"}</p><h2>Player statistics</h2></div><RefreshCw size={18}/></div><div className="test-player-list">{dashboard.players.map((player) => <div key={`${player.eventId}-${player.playerId}`}><span><b>{player.displayName}</b><small>{player.team} {player.position}</small></span><code>{formatProviderStats(player.stats)}</code>{player.fantasyPoints !== undefined && <strong className="fantasy-points">{formatFantasyPoints(player.fantasyPoints)} pts</strong>}{player.scoringBreakdown.length > 0 && <details><summary>Point breakdown</summary><div>{player.scoringBreakdown.map((item) => <p key={item.displayName}><span>{item.displayName}</span><small>{formatRawValue(item.rawValue)}</small><b className={item.points < 0 ? "negative" : ""}>{item.points > 0 ? "+" : ""}{formatFantasyPoints(item.points)}</b></p>)}</div></details>}</div>)}</div></section>
-          <section className="test-data-section"><div className="section-heading"><div><p className="eyebrow">Game feed</p><h2>Play by play</h2></div><Radio size={18}/></div><div className="test-play-list">{dashboard.plays.map((play) => <div className={play.scoringPlay ? "score" : play.turnover ? "turnover" : ""} key={play.playId}><time>Q{play.period} {play.clock}</time><p>{play.playText}</p><strong>{play.awayScore}-{play.homeScore}</strong></div>)}</div></section>
+          <section className="test-data-section"><div className="section-heading"><div><p className="eyebrow">{loadedDashboard.scoring ? `${loadedDashboard.scoring.leagueName} - scoring v${loadedDashboard.scoring.versionNumber}` : "Provider box score"}</p><h2>Player statistics</h2></div><RefreshCw size={18}/></div><div className="test-player-list">{loadedDashboard.players.map((player) => <div key={`${player.eventId}-${player.playerId}`}><span><b>{player.displayName}</b><small>{player.team} {player.position}</small></span><code>{formatProviderStats(player.stats)}</code>{player.fantasyPoints !== undefined && <strong className="fantasy-points">{formatFantasyPoints(player.fantasyPoints)} pts</strong>}{player.scoringBreakdown.length > 0 && <details><summary>Point breakdown</summary><div>{player.scoringBreakdown.map((item) => <p key={item.displayName}><span>{item.displayName}</span><small>{formatRawValue(item.rawValue)}</small><b className={item.points < 0 ? "negative" : ""}>{item.points > 0 ? "+" : ""}{formatFantasyPoints(item.points)}</b></p>)}</div></details>}</div>)}</div></section>
+          <section className="test-data-section"><div className="section-heading"><div><p className="eyebrow">Game feed</p><h2>Play by play</h2></div><Radio size={18}/></div><div className="test-play-list">{loadedDashboard.plays.map((play) => <div className={play.scoringPlay ? "score" : play.turnover ? "turnover" : ""} key={play.playId}><time>Q{play.period} {play.clock}</time><p>{play.playText}</p><strong>{play.awayScore}-{play.homeScore}</strong></div>)}</div></section>
         </div>
       </>}
     </div>
@@ -424,6 +443,11 @@ function formatProviderStats(stats: Record<string, string>): string {
 
 function formatFantasyPoints(value: number): string {
   return value.toFixed(3).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+}
+
+function formatGameTime(value?: string): string {
+  if (!value) return "TBD";
+  return new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(value));
 }
 
 function formatRawValue(value: number | number[]): string {
@@ -1046,6 +1070,13 @@ function NotificationCenterButton({ accessToken }: { accessToken: string }) {
     await leagueRequest(`/api/notifications/${notificationId}/read`, accessToken, { method: "POST", body: {} });
     setCenter((current) => current ? { ...current, unreadCount: Math.max(0, current.unreadCount - (current.notifications.find((item) => item.notificationId === notificationId)?.readAtUtc ? 0 : 1)), notifications: current.notifications.map((item) => item.notificationId === notificationId ? { ...item, readAtUtc: new Date().toISOString() } : item) } : current);
   }
+  async function openNotification(item: NotificationCenterResponse["notifications"][number]) {
+    await markRead(item.notificationId);
+    if (!item.actionUrl) return;
+    setOpen(false);
+    const target = new URL(item.actionUrl, window.location.origin);
+    window.location.assign(`${target.pathname}${target.search}${target.hash}`);
+  }
   return <div className="notification-center">
     <button className="icon-button" type="button" onClick={() => { setOpen((value) => !value); if (!center) void load(); }} aria-label="Notifications">
       <Bell size={19}/>{Boolean(center?.unreadCount) && <span>{Math.min(99, center!.unreadCount)}</span>}
@@ -1053,8 +1084,8 @@ function NotificationCenterButton({ accessToken }: { accessToken: string }) {
     {open && <div className="notification-panel">
       <header><div><p className="eyebrow">Updates</p><h2>Notifications</h2></div><button className="icon-button" onClick={() => setOpen(false)} aria-label="Close notifications"><X size={17}/></button></header>
       {error && <p className="notification-error">{error}</p>}
-      <div>{center?.notifications.length ? center.notifications.map((item) => <button className={item.readAtUtc ? "notification-item read" : "notification-item"} key={item.notificationId} onClick={() => void markRead(item.notificationId)}>
-        <span><strong>{item.title}</strong><small>{item.body}</small></span><time>{formatDate(item.createdAtUtc)}</time>
+      <div>{center?.notifications.length ? center.notifications.map((item) => <button className={item.readAtUtc ? "notification-item read" : "notification-item"} key={item.notificationId} onClick={() => void openNotification(item)}>
+        <span><strong>{item.title}</strong><small>{item.body}</small></span><time>{formatDate(item.createdAtUtc)}</time>{item.actionUrl && <ChevronRight size={15}/>}
       </button>) : <p className="muted-empty">You are all caught up.</p>}</div>
     </div>}
   </div>;
@@ -1273,7 +1304,7 @@ function TransactionsView({ league, accessToken, canManage }: { league: LeagueDe
 
   if (busy && !dashboard) return <div className="workspace-loading"><LoaderCircle className="spin" size={28}/><span>Loading transactions</span></div>;
   if (!dashboard || !lineup) return <section className="team-empty">{error || "Transactions are unavailable."}</section>;
-  const availablePlayers = players.filter((player) => !player.rosteredByTeamId);
+  const availablePlayers = players.filter((player) => !player.rosteredByTeamId && player.nflTeam);
   const otherTeams = league.members.filter((member) => member.teamId && member.teamId !== dashboard.teamId);
   const recipientPlayers = players.filter((player) => player.rosteredByTeamId === recipientTeamId);
   const pendingClaims = dashboard.claims.filter((claim) => claim.status === "pending");
@@ -1361,11 +1392,10 @@ function PlayersView({ league, accessToken, onNavigate }: { league: LeagueDetail
     {error && <InlineAlert message={error} onClose={() => setError("")}/>}
     <header className="directory-heading"><div><p className="eyebrow">League player pool</p><h2>Players</h2><span>Search availability, injuries, profiles, and recent performance.</span></div></header>
     <FantasyProsAttribution updatedAt={players.find((player) => player.rankingUpdatedAt)?.rankingUpdatedAt}/>
-    <div className="directory-toolbar"><label><Search size={16}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search NFL players"/></label><select aria-label="Sort players" value={sort} onChange={(event) => setSort(event.target.value)}><option value="rank">Best available rank</option><option value="projected-week">Projected points - upcoming week</option><option value="projected-remaining-average">Projected points - remaining average</option><option value="name">A to Z</option><option value="name-desc">Z to A</option><option value="team">By NFL team</option><option value="position">By position</option></select><select aria-label="Filter by position" value={position} onChange={(event) => setPosition(event.target.value)}><option value="">All positions</option>{["QB","RB","WR","TE","K","DST","DL","LB","DB"].map((item) => <option key={item}>{item}</option>)}</select><select aria-label="Filter by NFL team" value={teamFilter} onChange={(event) => setTeamFilter(event.target.value)}><option value="">All NFL teams</option>{nflTeams.map((item) => <option key={item}>{item}</option>)}</select><label className="watch-filter"><input type="checkbox" checked={availableOnly} onChange={(event) => setAvailableOnly(event.target.checked)}/> Available</label><label className="watch-filter"><input type="checkbox" checked={watchedOnly} onChange={(event) => setWatchedOnly(event.target.checked)}/> Watchlist</label></div>
+    <div className="directory-toolbar"><label><Search size={16}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search NFL players"/></label><select aria-label="Sort players" value={sort} onChange={(event) => setSort(event.target.value)}><option value="rank">Best available rank</option><option value="projected-remaining-average">Projected Points - Average of remaining games</option><option value="projected-week">Projected Points - This week</option><option value="name">A to Z</option><option value="name-desc">Z to A</option><option value="team">By NFL team</option><option value="position">By position</option></select><select aria-label="Filter by position" value={position} onChange={(event) => setPosition(event.target.value)}><option value="">All positions</option>{["QB","RB","WR","TE","K","DST","DL","LB","DB"].map((item) => <option key={item}>{item}</option>)}</select><select aria-label="Filter by NFL team" value={teamFilter} onChange={(event) => setTeamFilter(event.target.value)}><option value="">All NFL teams</option>{nflTeams.map((item) => <option key={item}>{item}</option>)}</select><label className="watch-filter"><input type="checkbox" checked={availableOnly} onChange={(event) => setAvailableOnly(event.target.checked)}/> Available</label><label className="watch-filter"><input type="checkbox" checked={watchedOnly} onChange={(event) => setWatchedOnly(event.target.checked)}/> Watchlist</label></div>
     <div className="directory-layout"><section className="directory-table">{busy ? <div className="workspace-loading"><LoaderCircle className="spin" size={24}/><span>Loading players</span></div> : players.length ? players.map((player) => {
       const projectionValue = sort === "projected-remaining-average" ? player.remainingAverageProjectedPoints : player.projectedPoints;
-      const projectionLabel = sort === "projected-remaining-average" ? "rem avg" : "wk proj";
-      return <div className="directory-row" key={player.playerId}><b className="expert-rank" title="FantasyPros Expert Consensus Rank">{player.expertConsensusRank ?? "-"}</b><PlayerAvatar src={player.headshotUrl} name={player.displayName}/><button className="player-name-button" onClick={() => void openProfile(player.playerId)}><strong>{player.displayName}</strong><small>{player.positionRank ? `${player.positionRank} - ` : ""}{player.position} - {player.nflTeam ?? "FA"}{player.byeWeek ? ` - Bye ${player.byeWeek}` : ""}</small></button><span className={player.rosteredByTeamName ? "ownership rostered" : "ownership available"}>{player.rosteredByTeamName ?? "Available"}</span><span className="projection-cell"><b>{projectionValue !== undefined ? formatFantasyPoints(projectionValue) : "-"}</b><small>{projectionLabel}</small></span><span>{player.injuryStatus ?? "Healthy"}</span><button className="icon-button" title="Compare player" aria-label={`Compare ${player.displayName}`} onClick={() => void openProfile(player.playerId, true)}><SlidersHorizontal size={16}/></button></div>;
+      return <div className="directory-row" key={player.playerId}><b className="expert-rank" title="FantasyPros Expert Consensus Rank">{player.expertConsensusRank ?? "-"}</b><PlayerAvatar src={player.headshotUrl} name={player.displayName}/><button className="player-name-button" onClick={() => void openProfile(player.playerId)}><strong>{player.displayName}</strong><small>{player.position} - {player.nflTeam ?? "FA"}{player.byeWeek ? ` - Bye ${player.byeWeek}` : ""}</small></button><span className={player.rosteredByTeamName ? "ownership rostered" : "ownership available"}>{player.rosteredByTeamName ?? "Available"}</span><span className="projection-cell"><b>{projectionValue !== undefined ? formatFantasyPoints(projectionValue) : "-"}</b></span><span>{player.injuryStatus ?? "Healthy"}</span><button className="icon-button" title="Compare player" aria-label={`Compare ${player.displayName}`} onClick={() => void openProfile(player.playerId, true)}><SlidersHorizontal size={16}/></button></div>;
     }) : <p className="muted-empty">No players match these filters.</p>}</section><aside className="directory-compare"><p className="eyebrow">Head to head</p><h3>Comparison</h3>{compare.length ? compare.map((player) => <div key={player.playerId}><strong>{player.displayName}</strong><span>{player.position} - {player.nflTeam ?? "FA"}</span><small>{player.injuryStatus ?? "No injury designation"}</small><b>{player.rosteredByTeamName ?? "Available"}</b></div>) : <p className="muted-empty">Use the compare control beside up to two players.</p>}</aside></div>
   </div>;
 }
@@ -1484,6 +1514,7 @@ function DraftView({ league, accessToken }: { league: LeagueDetail; accessToken:
   const [players, setPlayers] = useState<DraftPlayerView[]>([]);
   const [query, setQuery] = useState("");
   const [position, setPosition] = useState("");
+  const [sort, setSort] = useState("rank");
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
   const [clockNow, setClockNow] = useState(Date.now());
@@ -1524,6 +1555,7 @@ function DraftView({ league, accessToken }: { league: LeagueDetail; accessToken:
         const params = new URLSearchParams({ limit: "120" });
         if (query.trim()) params.set("query", query.trim());
         if (position) params.set("position", position);
+        if (sort) params.set("sort", sort);
         const next = await leagueRequest<DraftPlayerView[]>(`/api/leagues/${league.leagueId}/draft/players?${params}`, accessToken);
         if (active) setPlayers(next);
       } catch (requestError) {
@@ -1531,7 +1563,7 @@ function DraftView({ league, accessToken }: { league: LeagueDetail; accessToken:
       }
     }, 180);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [accessToken, league.leagueId, query, position, room?.revisionNumber]);
+  }, [accessToken, league.leagueId, query, position, sort, room?.revisionNumber]);
 
   async function command(action: string, body: Record<string, unknown> = {}) {
     if (!room) return;
@@ -1631,7 +1663,7 @@ function DraftView({ league, accessToken }: { league: LeagueDetail; accessToken:
       </div></section>
 
       <div className="draft-workspace-grid">
-        <section className="draft-player-pool"><div className="section-heading"><div><p className="eyebrow">Available players</p><h2>Player board</h2></div><span>{players.filter((player) => !player.drafted).length} shown</span></div><FantasyProsAttribution updatedAt={players.find((player) => player.rankingUpdatedAt)?.rankingUpdatedAt}/><div className="draft-filters"><label><Search size={16}/><input placeholder="Search players" value={query} onChange={(event) => setQuery(event.target.value)}/></label><select aria-label="Filter position" value={position} onChange={(event) => setPosition(event.target.value)}><option value="">All positions</option>{["QB","RB","WR","TE","K","DST","DL","LB","DB"].map((item) => <option key={item}>{item}</option>)}</select></div><div className="draft-player-list">{players.map((player) => <div className={player.drafted ? "drafted" : ""} key={player.playerId}><b title={player.expertConsensusRank ? "FantasyPros Expert Consensus Rank" : "myFFL fallback order"}>{player.rank}</b><PlayerAvatar src={player.headshotUrl} name={player.displayName}/><span><strong>{player.displayName}</strong><small>{player.positionRank ? `${player.positionRank} - ` : ""}{player.position} - {player.nflTeam ?? "FA"}{player.byeWeek ? ` - Bye ${player.byeWeek}` : ""}{player.tier ? ` - Tier ${player.tier}` : ""}</small></span><span className="draft-projection"><b>{player.averageProjectedPointsPerGame !== undefined ? formatFantasyPoints(player.averageProjectedPointsPerGame) : "-"}</b><small>avg proj/game</small></span><button className="icon-button" title={player.queued ? "Remove from queue" : "Add to queue"} aria-label={player.queued ? `Remove ${player.displayName}` : `Add ${player.displayName} to queue`} disabled={player.drafted} onClick={() => void saveQueue(player.queued ? queueIds.filter((id) => id !== player.playerId) : [...queueIds, player.playerId])}>{player.queued ? <X size={16}/> : <ListPlus size={16}/>}</button><button className="draft-player-button" disabled={player.drafted || (!room.canPick && !room.canManage) || room.status !== "active"} onClick={() => void makePick(player.playerId)}>Draft</button></div>)}</div></section>
+        <section className="draft-player-pool"><div className="section-heading"><div><p className="eyebrow">Available players</p><h2>Player board</h2></div><span>{players.filter((player) => !player.drafted).length} shown</span></div><FantasyProsAttribution updatedAt={players.find((player) => player.rankingUpdatedAt)?.rankingUpdatedAt}/><div className="draft-filters"><label><Search size={16}/><input placeholder="Search players" value={query} onChange={(event) => setQuery(event.target.value)}/></label><select aria-label="Sort draft players" value={sort} onChange={(event) => setSort(event.target.value)}><option value="rank">Best available rank</option><option value="projected-average">Projected Points - Average per game</option><option value="projected-week">Projected Points - This week</option><option value="name">A to Z</option><option value="team">By NFL team</option><option value="position">By position</option></select><select aria-label="Filter position" value={position} onChange={(event) => setPosition(event.target.value)}><option value="">All positions</option>{["QB","RB","WR","TE","K","DST","DL","LB","DB"].map((item) => <option key={item}>{item}</option>)}</select></div><div className="draft-player-list">{players.map((player) => { const signed = Boolean(player.nflTeam); const projection = sort === "projected-week" ? player.projectedPoints : player.averageProjectedPointsPerGame; return <div className={`${player.drafted ? "drafted" : ""} ${!signed ? "free-agent" : ""}`} key={player.playerId}><b title={player.expertConsensusRank ? "FantasyPros Expert Consensus Rank" : "myFFL fallback order"}>{player.rank}</b><PlayerAvatar src={player.headshotUrl} name={player.displayName}/><span><strong>{player.displayName}</strong><small>{player.position} - {player.nflTeam ?? "FA"}{player.byeWeek ? ` - Bye ${player.byeWeek}` : ""}{player.tier ? ` - Tier ${player.tier}` : ""}</small></span><span className="draft-projection"><b>{projection !== undefined ? formatFantasyPoints(projection) : "-"}</b></span><button className="icon-button" title={!signed ? "Free agents cannot be queued" : player.queued ? "Remove from queue" : "Add to queue"} aria-label={player.queued ? `Remove ${player.displayName}` : `Add ${player.displayName} to queue`} disabled={player.drafted || !signed} onClick={() => void saveQueue(player.queued ? queueIds.filter((id) => id !== player.playerId) : [...queueIds, player.playerId])}>{player.queued ? <X size={16}/> : <ListPlus size={16}/>}</button><button className="draft-player-button" disabled={player.drafted || !signed || (!room.canPick && !room.canManage) || room.status !== "active"} onClick={() => void makePick(player.playerId)}>{signed ? "Draft" : "FA"}</button></div>; })}</div></section>
         <aside className="draft-side-panel"><div className="section-heading"><div><p className="eyebrow">Autopick priority</p><h2>My queue</h2></div><ListChecks size={18}/></div>{room.queue.length ? <div className="draft-queue-list">{room.queue.map((player, index) => <div key={player.playerId}><b>{index + 1}</b><span>{player.displayName}<small>{player.position} {player.nflTeam}</small></span><button className="icon-button" aria-label={`Remove ${player.displayName}`} onClick={() => void saveQueue(queueIds.filter((id) => id !== player.playerId))}><X size={15}/></button></div>)}</div> : <p className="muted-empty">Add players from the board. The first legal, available player is selected on autopick.</p>}<div className="draft-roster-summary"><p className="eyebrow">Current rosters</p>{room.teams.map((team) => <div key={team.fantasyTeamId}><span>{team.teamName}</span><b>{room.picks.filter((pick) => pick.fantasyTeamId === team.fantasyTeamId && pick.status === "active").length}/{room.rounds}</b></div>)}</div></aside>
       </div>
     </div>
@@ -2216,3 +2248,4 @@ const timeZones = [
   "Pacific/Honolulu",
   "UTC",
 ];
+

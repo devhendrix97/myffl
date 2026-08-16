@@ -7,6 +7,7 @@ import { newId, type AccessTokenPrincipal } from "./security";
 import { rankingContext, rankingsForPlayers } from "./fantasypros";
 import { espnAthleteHeadshotUrl, providerAssetUrl } from "./assets";
 import { loadRemainingAverageProjectionPoints, loadUpcomingProjectionWeek, loadWeeklyProjectionPoints } from "./projections";
+import { fantasyPositionSql, isFantasyPosition } from "./player-eligibility";
 
 interface RosterRow { fantasy_roster_player_id: string; nfl_player_id: string; position: string; }
 interface AssignmentRow extends RosterRow { slot_type: string; slot_index: number; }
@@ -105,7 +106,7 @@ async function searchPlayers(principal: AccessTokenPrincipal, db: D1Database, se
   const league = await db.prepare("select league_id from league_seasons where league_season_id=?1").bind(seasonId).first<{ league_id: string }>();
   const ranking = await rankingContext(db, league?.league_id ?? "", seasonId);
   const orderClause = sort === "rank"
-    ? "order by coalesce(rankings.overall_rank, 99999), players.display_name"
+    ? "order by players.current_team_id is null, coalesce(rankings.overall_rank, 99999), players.display_name"
     : "order by players.display_name";
   const result = await env.NFL_DB.prepare(
     `select players.nfl_player_id, players.display_name, players.position, teams.abbreviation, players.current_team_id,
@@ -113,7 +114,7 @@ async function searchPlayers(principal: AccessTokenPrincipal, db: D1Database, se
      from nfl_players players left join nfl_teams teams on teams.nfl_team_id = players.current_team_id
      left join fantasypros_rankings rankings on rankings.nfl_player_id = players.nfl_player_id
       and rankings.season_year = ?6 and rankings.scoring = ?7
-     where (?1 = '' or players.display_name like ?2) and (?3 = '' or players.position = ?3)
+     where ${fantasyPositionSql()} and (?1 = '' or players.display_name like ?2) and (?3 = '' or players.position = ?3)
        and (?4 = '' or teams.abbreviation = ?4)
      ${orderClause} limit ?5`,
   ).bind(query, `%${query}%`, position, team, 1200, ranking.seasonYear, ranking.scoring).all<ProfileRow>();
@@ -145,6 +146,8 @@ async function searchPlayers(principal: AccessTokenPrincipal, db: D1Database, se
 }
 
 function comparePlayers(left: ProfileRow, right: ProfileRow, sort: string, rankings: Map<string, { overallRank?: number }>, weeklyProjectionPoints: Map<string, number>, remainingAverageProjectionPoints: Map<string, number>): number {
+  const signed = compareSignedPlayers(left, right);
+  if (signed !== 0) return signed;
   if (sort === "name-desc") return right.display_name.localeCompare(left.display_name);
   if (sort === "team") return (left.abbreviation ?? "ZZZ").localeCompare(right.abbreviation ?? "ZZZ") || left.display_name.localeCompare(right.display_name);
   if (sort === "position") return (left.position ?? "ZZZ").localeCompare(right.position ?? "ZZZ") || (rankings.get(left.nfl_player_id)?.overallRank ?? 99999) - (rankings.get(right.nfl_player_id)?.overallRank ?? 99999) || left.display_name.localeCompare(right.display_name);
@@ -152,6 +155,12 @@ function comparePlayers(left: ProfileRow, right: ProfileRow, sort: string, ranki
   if (sort === "projected-week") return (weeklyProjectionPoints.get(right.nfl_player_id) ?? -9999) - (weeklyProjectionPoints.get(left.nfl_player_id) ?? -9999) || left.display_name.localeCompare(right.display_name);
   if (sort === "projected-remaining-average") return (remainingAverageProjectionPoints.get(right.nfl_player_id) ?? -9999) - (remainingAverageProjectionPoints.get(left.nfl_player_id) ?? -9999) || left.display_name.localeCompare(right.display_name);
   return left.display_name.localeCompare(right.display_name);
+}
+
+function compareSignedPlayers(left: ProfileRow, right: ProfileRow): number {
+  if (left.current_team_id && !right.current_team_id) return -1;
+  if (!left.current_team_id && right.current_team_id) return 1;
+  return 0;
 }
 
 async function loadFantasyPoints(db: D1Database, nflDb: D1Database, seasonId: string, playerIds: string[], week: number, dataScope: string): Promise<Map<string, number>> {
@@ -305,8 +314,9 @@ async function getPlayerProfile(principal: AccessTokenPrincipal, db: D1Database,
   ]);
   const isMine = Boolean(owner && ownTeam?.fantasy_team_id === owner.fantasy_team_id);
   const actions: PlayerProfileResponse["availableActions"] = ["watch"];
-  if (!owner) actions.push("add", "claim");
-  else if (isMine) actions.push("trade-away");
+  if (!owner) {
+    if (profile.current_team_id && isFantasyPosition(profile.position)) actions.push("add", "claim");
+  } else if (isMine) actions.push("trade-away");
   else actions.push("trade-for");
   if (!draft || ["setup", "scheduled", "active", "paused"].includes(draft.status)) actions.push("draft-queue");
   return { playerId, displayName: profile.display_name, position: profile.position ?? "UNK", nflTeam: profile.abbreviation ?? undefined, headshotUrl: espnAthleteHeadshotUrl(env, profile.nfl_player_id, profile.headshot_object_key), nflTeamLogoUrl: providerAssetUrl(env, profile.logo_object_key), injuryStatus: injury?.status ?? undefined, rosteredByTeamId: owner?.fantasy_team_id, rosteredByTeamName: owner?.team_name, watched: Boolean(watched), availableActions: actions, yearlyStats: yearlyStats(yearlyGames.results ?? []), recentGames: (games.results ?? []).map((game) => ({ eventId: game.nfl_event_id, stats: parseObject(game.stats_json) })) };

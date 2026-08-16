@@ -43,7 +43,9 @@ export async function handleGameFeedRequest(
     }
     if (row?.scoringVersionId) scoring = row;
   }
-  return { data: await readGameFeed(env, runtime.dataScope, scoring) };
+  const weeks = await loadNflWeeks(env.NFL_DB);
+  const selectedWeek = selectNflWeek(weeks, url.searchParams.get("weekKey") ?? url.searchParams.get("week"));
+  return { data: await readGameFeed(env, runtime.dataScope, scoring, selectedWeek, weeks) };
 }
 
 interface ScoringContext {
@@ -52,6 +54,14 @@ interface ScoringContext {
   seasonId: string;
   scoringVersionId: string | null;
   versionNumber: number | null;
+}
+
+interface NflWeekOption {
+  seasonYear: number;
+  seasonType: number;
+  week: number;
+  key: string;
+  label: string;
 }
 
 export async function getProviderRuntime(env: Env): Promise<{
@@ -80,28 +90,36 @@ export function providerDataScope(mode: "live" | "replay", runId: string | null)
   return mode === "replay" && runId ? `simulation:${runId}` : "production";
 }
 
-export async function readGameFeed(env: Env, scope: string, scoring?: ScoringContext): Promise<{
+export async function readGameFeed(env: Env, scope: string, scoring?: ScoringContext, selectedWeek?: NflWeekOption | null, weeks: NflWeekOption[] = []): Promise<{
   games: unknown[];
   players: unknown[];
   plays: unknown[];
   currentPlay: unknown | null;
   scoring: { leagueId: string; leagueName: string; versionNumber: number } | null;
+  weeks: NflWeekOption[];
+  selectedWeek: NflWeekOption | null;
 }> {
+  const week = selectedWeek ?? weeks[0] ?? null;
   const [gameRows, playerRows, playRows] = await Promise.all([
     env.NFL_DB.prepare(
       `select events.nfl_event_id as nflEventId, events.provider_event_id as eventId,
-        snapshots.status, snapshots.status_detail as statusDetail,
-        snapshots.period, snapshots.clock, snapshots.home_score as homeScore, snapshots.away_score as awayScore,
-        snapshots.completed, snapshots.situation_json as situationJson,
+        events.season_year as seasonYear, events.season_type as seasonType, events.week, events.starts_at_utc as startsAtUtc,
+        coalesce(snapshots.status, events.status, 'pre') as status,
+        coalesce(snapshots.status_detail, case when events.status = 'post' then 'Final' else 'Scheduled' end) as statusDetail,
+        coalesce(snapshots.period, 0) as period, coalesce(snapshots.clock, '') as clock,
+        coalesce(snapshots.home_score, 0) as homeScore, coalesce(snapshots.away_score, 0) as awayScore,
+        coalesce(snapshots.completed, case when events.status = 'post' then 1 else 0 end) as completed,
+        snapshots.situation_json as situationJson,
         home.abbreviation as homeTeam, home.display_name as homeTeamName,
         away.abbreviation as awayTeam, away.display_name as awayTeamName,
-        snapshots.updated_at_utc as updatedAtUtc
-       from nfl_event_snapshots snapshots
-       join nfl_events events on events.nfl_event_id = snapshots.nfl_event_id
+        coalesce(snapshots.updated_at_utc, events.updated_at_utc) as updatedAtUtc
+       from nfl_events events
+       left join nfl_event_snapshots snapshots on snapshots.nfl_event_id = events.nfl_event_id and snapshots.data_scope = ?1
        left join nfl_team_snapshots home on home.nfl_team_id = snapshots.home_team_id and home.data_scope = snapshots.data_scope
        left join nfl_team_snapshots away on away.nfl_team_id = snapshots.away_team_id and away.data_scope = snapshots.data_scope
-       where snapshots.data_scope = ?1 order by snapshots.updated_at_utc desc limit 16`,
-    ).bind(scope).all(),
+       where (?2 = 0 or events.season_year = ?2) and (?3 = 0 or events.season_type = ?3) and (?4 = 0 or events.week = ?4)
+       order by case coalesce(snapshots.status, events.status, 'pre') when 'in' then 0 when 'pre' then 1 else 2 end, events.starts_at_utc limit 32`,
+    ).bind(scope, week?.seasonYear ?? 0, week?.seasonType ?? 0, week?.week ?? 0).all(),
     env.NFL_DB.prepare(
       `select stats.nfl_event_id as eventId, stats.nfl_player_id as playerId,
         players.display_name as displayName, stats.position, stats.stats_json as statsJson,
@@ -110,19 +128,17 @@ export async function readGameFeed(env: Env, scope: string, scoring?: ScoringCon
        join nfl_players players on players.nfl_player_id = stats.nfl_player_id
        left join nfl_team_snapshots teams on teams.nfl_team_id = stats.team_id and teams.data_scope = stats.data_scope
        where stats.data_scope = ?1 and stats.nfl_event_id in (
-         select nfl_event_id from nfl_event_snapshots where data_scope = ?1
-         order by updated_at_utc desc limit 16
+         select nfl_event_id from nfl_events where (?2 = 0 or season_year = ?2) and (?3 = 0 or season_type = ?3) and (?4 = 0 or week = ?4)
        ) order by teams.abbreviation, players.display_name limit 300`,
-    ).bind(scope).all(),
+    ).bind(scope, week?.seasonYear ?? 0, week?.seasonType ?? 0, week?.week ?? 0).all(),
     env.NFL_DB.prepare(
       `select provider_play_id as playId, sequence_number as sequenceNumber, drive_id as driveId,
         period, clock, play_type as playType, play_text as playText, stat_yardage as statYardage,
         home_score as homeScore, away_score as awayScore, scoring_play as scoringPlay,
         turnover from nfl_event_plays where data_scope = ?1 and nfl_event_id in (
-          select nfl_event_id from nfl_event_snapshots where data_scope = ?1
-          order by updated_at_utc desc limit 16
+          select nfl_event_id from nfl_events where (?2 = 0 or season_year = ?2) and (?3 = 0 or season_type = ?3) and (?4 = 0 or week = ?4)
         ) order by sequence_number desc limit 200`,
-    ).bind(scope).all(),
+    ).bind(scope, week?.seasonYear ?? 0, week?.seasonType ?? 0, week?.week ?? 0).all(),
   ]);
   const eventIds = gameRows.results.map((row) => String((row as { nflEventId: string }).nflEventId));
   const eventPlaceholders = eventIds.map((_, index) => `?${index + 3}`).join(",");
@@ -176,7 +192,8 @@ export async function readGameFeed(env: Env, scope: string, scoring?: ScoringCon
   });
   const games = gameRows.results.map((row) => {
     const value = row as Record<string, unknown>;
-    return { ...value, completed: Boolean(value.completed), situation: safeJson(String(value.situationJson ?? ""), null), situationJson: undefined };
+    const status = value.status === "final" ? "post" : value.status;
+    return { ...value, status, completed: Boolean(value.completed), situation: safeJson(String(value.situationJson ?? ""), null), situationJson: undefined };
   });
   return {
     games,
@@ -188,7 +205,42 @@ export async function readGameFeed(env: Env, scope: string, scoring?: ScoringCon
       leagueName: scoring.leagueName,
       versionNumber: scoring.versionNumber ?? 1,
     } : null,
+    weeks,
+    selectedWeek: week,
   };
+}
+
+async function loadNflWeeks(db: D1Database): Promise<NflWeekOption[]> {
+  const rows = await db.prepare(
+    `select season_year as seasonYear, season_type as seasonType, week
+     from nfl_events
+     where season_year = (select max(season_year) from nfl_events)
+     group by season_year, season_type, week
+     order by season_type, week`,
+  ).all<{ seasonYear: number; seasonType: number; week: number }>();
+  return (rows.results ?? []).map((row) => ({
+    ...row,
+    key: `${row.seasonYear}:${row.seasonType}:${row.week}`,
+    label: weekLabel(row.seasonType, row.week),
+  }));
+}
+
+function selectNflWeek(weeks: NflWeekOption[], key: string | null): NflWeekOption | null {
+  if (!weeks.length) return null;
+  if (key) {
+    const parts = key.split(":").map(Number);
+    const selected = parts.length === 3
+      ? weeks.find((week) => week.seasonYear === parts[0] && week.seasonType === parts[1] && week.week === parts[2])
+      : weeks.find((week) => week.week === Number(key) || week.key === key);
+    if (selected) return selected;
+  }
+  return weeks.find((week) => week.seasonType === 2 && week.week === 1) ?? weeks[0];
+}
+
+function weekLabel(seasonType: number, week: number): string {
+  if (seasonType === 1) return `Preseason Week ${week}`;
+  if (seasonType === 3) return `Playoffs Week ${week}`;
+  return `Week ${week}`;
 }
 
 function safeJson(value: string | undefined, fallback: unknown): unknown {

@@ -385,6 +385,7 @@ export interface DraftPlayerView {
   tier?: number;
   byeWeek?: number;
   rankingUpdatedAt?: string;
+  projectedPoints?: number;
   averageProjectedPointsPerGame?: number;
 }
 

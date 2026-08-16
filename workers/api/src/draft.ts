@@ -15,7 +15,8 @@ import { newId, type AccessTokenPrincipal } from "./security";
 import { enqueueLeagueNotification } from "./notifications";
 import { rankingContext, rankingsForPlayers, type FantasyProsRanking } from "./fantasypros";
 import { espnAthleteHeadshotUrl, providerAssetUrl } from "./assets";
-import { loadSeasonAverageProjectionPoints } from "./projections";
+import { loadSeasonAverageProjectionPoints, loadUpcomingProjectionWeek, loadWeeklyProjectionPoints } from "./projections";
+import { fantasyPositionSql, isFantasyPosition } from "./player-eligibility";
 
 const managerRoles = ["commissioner", "co-commissioner", "manager"] as const;
 const commissionerRoles = ["commissioner", "co-commissioner"] as const;
@@ -39,7 +40,7 @@ interface PickRow {
 }
 
 interface PlayerRow {
-  nfl_player_id: string; display_name: string; position: string | null; abbreviation: string | null; headshot_object_key: string | null; logo_object_key: string | null;
+  nfl_player_id: string; display_name: string; position: string | null; abbreviation: string | null; current_team_id: string | null; headshot_object_key: string | null; logo_object_key: string | null;
 }
 
 interface DraftContext {
@@ -75,7 +76,7 @@ export async function handleDraftRequest(
     return { data: await getDraftRoom(await refreshContext(context), env) };
   }
   if (request.method === "PUT" && action === "queue") {
-    await saveQueue(context, await readJson<DraftQueueUpdateRequest>(request));
+    await saveQueue(context, env, await readJson<DraftQueueUpdateRequest>(request));
     return { data: await getDraftRoom(await refreshContext(context), env) };
   }
   if (request.method === "POST" && action === "pick") {
@@ -197,36 +198,58 @@ async function getDraftRoom(context: DraftContext, env: Env): Promise<DraftRoomR
 async function searchDraftPlayers(context: DraftContext, env: Env, url: URL): Promise<DraftPlayerView[]> {
   const query = String(url.searchParams.get("query") ?? "").trim().slice(0, 60);
   const position = String(url.searchParams.get("position") ?? "").trim().toUpperCase();
+  const sort = String(url.searchParams.get("sort") ?? "rank").trim().toLowerCase();
   const limit = Math.min(200, Math.max(10, Number(url.searchParams.get("limit") ?? 100)));
   const pickedRows = await context.db.prepare(
     "select nfl_player_id from draft_picks where draft_id = ?1 and status = 'active' and nfl_player_id is not null",
   ).bind(context.draft.draft_id).all<{ nfl_player_id: string }>();
   const drafted = new Set((pickedRows.results ?? []).map((row) => row.nfl_player_id));
   const queue = new Set((await loadQueuePlayerIds(context)).map((row) => row.nfl_player_id));
-  const conditions = ["players.position is not null"];
+  const conditions = [fantasyPositionSql()];
   const bindings: unknown[] = [];
   if (query) { bindings.push(`%${query.replaceAll("%", "")}%`); conditions.push(`players.display_name like ?${bindings.length}`); }
   if (position) { bindings.push(position); conditions.push(`players.position = ?${bindings.length}`); }
   const ranking = await rankingContext(context.db, context.leagueId, context.seasonId);
   const result = await env.NFL_DB.prepare(
-    `select players.nfl_player_id, players.display_name, players.position, teams.abbreviation,
+    `select players.nfl_player_id, players.display_name, players.position, players.current_team_id, teams.abbreviation,
       players.headshot_object_key, teams.logo_object_key
      from nfl_players players left join nfl_teams teams on teams.nfl_team_id = players.current_team_id
      left join fantasypros_rankings rankings on rankings.nfl_player_id = players.nfl_player_id
       and rankings.season_year = ?${bindings.length + 1} and rankings.scoring = ?${bindings.length + 2}
      where ${conditions.join(" and ")}
-     order by coalesce(rankings.overall_rank, 99999), players.display_name limit ${Math.max(limit * 3, 300)}`,
+     order by players.current_team_id is null, coalesce(rankings.overall_rank, 99999), players.display_name limit ${Math.max(limit * 4, 400)}`,
   ).bind(...bindings, ranking.seasonYear, ranking.scoring).all<PlayerRow>();
   const profiles = result.results ?? [];
+  const projectionWeek = await loadUpcomingProjectionWeek(env.NFL_DB, ranking.seasonYear);
   const [weights, rankings] = await Promise.all([
     positionWeights(context.db, context.seasonId),
     rankingsForPlayers(env.NFL_DB, ranking.seasonYear, ranking.scoring, profiles.map((player) => player.nfl_player_id)),
   ]);
-  const averageProjectedPoints = await loadSeasonAverageProjectionPoints(context.db, env.NFL_DB, context.seasonId, profiles.map((player) => player.nfl_player_id));
+  const [averageProjectedPoints, weeklyProjectedPoints] = await Promise.all([
+    loadSeasonAverageProjectionPoints(context.db, env.NFL_DB, context.seasonId, profiles.map((player) => player.nfl_player_id)),
+    loadWeeklyProjectionPoints(context.db, env.NFL_DB, context.seasonId, profiles.map((player) => player.nfl_player_id), projectionWeek),
+  ]);
   return profiles.map((player) => ({ player, ranking: rankings.get(player.nfl_player_id), score: weights.get(player.position ?? "") ?? 0 }))
-    .sort((left, right) => (left.ranking?.overallRank ?? 99999) - (right.ranking?.overallRank ?? 99999) || right.score - left.score || left.player.display_name.localeCompare(right.player.display_name))
+    .sort((left, right) => compareDraftPlayers(left, right, sort, averageProjectedPoints, weeklyProjectedPoints))
     .slice(0, limit)
-    .map((item, index) => playerView(item.player, item.ranking?.overallRank ?? index + 1, queue.has(item.player.nfl_player_id), drafted.has(item.player.nfl_player_id), item.ranking, env, averageProjectedPoints.get(item.player.nfl_player_id)));
+    .map((item, index) => playerView(item.player, item.ranking?.overallRank ?? index + 1, queue.has(item.player.nfl_player_id), drafted.has(item.player.nfl_player_id), item.ranking, env, averageProjectedPoints.get(item.player.nfl_player_id), weeklyProjectedPoints.get(item.player.nfl_player_id)));
+}
+
+function compareDraftPlayers(
+  left: { player: PlayerRow; ranking?: FantasyProsRanking; score: number },
+  right: { player: PlayerRow; ranking?: FantasyProsRanking; score: number },
+  sort: string,
+  averageProjectedPoints: Map<string, number>,
+  weeklyProjectedPoints: Map<string, number>,
+): number {
+  if (left.player.current_team_id && !right.player.current_team_id) return -1;
+  if (!left.player.current_team_id && right.player.current_team_id) return 1;
+  if (sort === "projected-week") return (weeklyProjectedPoints.get(right.player.nfl_player_id) ?? -9999) - (weeklyProjectedPoints.get(left.player.nfl_player_id) ?? -9999) || left.player.display_name.localeCompare(right.player.display_name);
+  if (sort === "projected-average") return (averageProjectedPoints.get(right.player.nfl_player_id) ?? -9999) - (averageProjectedPoints.get(left.player.nfl_player_id) ?? -9999) || left.player.display_name.localeCompare(right.player.display_name);
+  if (sort === "name") return left.player.display_name.localeCompare(right.player.display_name);
+  if (sort === "team") return (left.player.abbreviation ?? "ZZZ").localeCompare(right.player.abbreviation ?? "ZZZ") || left.player.display_name.localeCompare(right.player.display_name);
+  if (sort === "position") return (left.player.position ?? "ZZZ").localeCompare(right.player.position ?? "ZZZ") || (left.ranking?.overallRank ?? 99999) - (right.ranking?.overallRank ?? 99999) || left.player.display_name.localeCompare(right.player.display_name);
+  return (left.ranking?.overallRank ?? 99999) - (right.ranking?.overallRank ?? 99999) || right.score - left.score || left.player.display_name.localeCompare(right.player.display_name);
 }
 
 async function saveSetup(context: DraftContext, env: Env, body: DraftSetupRequest, correlationId: string): Promise<void> {
@@ -272,9 +295,10 @@ async function makeDraftPick(context: DraftContext, env: Env, body: MakeDraftPic
   const commissioner = commissionerRoles.includes(context.role as typeof commissionerRoles[number]);
   if (!source && !commissioner && team.manager_user_id !== context.principal.userId) throw new ApiException(403, "not_on_clock", "Your team is not on the clock.");
   const player = await env.NFL_DB.prepare(
-    "select nfl_player_id, display_name, position from nfl_players where nfl_player_id = ?1",
-  ).bind(body.playerId).first<{ nfl_player_id: string; display_name: string; position: string | null }>();
+    "select nfl_player_id, display_name, position, current_team_id from nfl_players where nfl_player_id = ?1",
+  ).bind(body.playerId).first<{ nfl_player_id: string; display_name: string; position: string | null; current_team_id: string | null }>();
   if (!player) throw new ApiException(404, "player_not_found", "Player not found.");
+  if (!player.current_team_id || !isFantasyPosition(player.position)) throw new ApiException(409, "player_not_draftable", "Only active NFL players signed to a team can be drafted.");
   await requireRosterLegal(context.db, context.seasonId, team.fantasy_team_id, player.position ?? "");
   const now = new Date().toISOString();
   const pickId = newId("dpk");
@@ -401,10 +425,11 @@ async function adjustTime(context: DraftContext, revision: number | undefined, s
   ]);
 }
 
-async function saveQueue(context: DraftContext, body: DraftQueueUpdateRequest): Promise<void> {
+async function saveQueue(context: DraftContext, env: Env, body: DraftQueueUpdateRequest): Promise<void> {
   const team = (await loadTeams(context.db, context.draft.draft_id)).find((item) => item.manager_user_id === context.principal.userId);
   if (!team) throw new ApiException(403, "draft_team_required", "A managed fantasy team is required for a draft queue.");
   const playerIds = [...new Set(Array.isArray(body.playerIds) ? body.playerIds.filter((value): value is string => typeof value === "string").slice(0, 200) : [])];
+  const validPlayerIds = await draftablePlayerIds(env.NFL_DB, playerIds);
   const now = new Date().toISOString();
   let queue = await context.db.prepare("select draft_queue_id from draft_queues where draft_id = ?1 and fantasy_team_id = ?2 and user_id = ?3").bind(context.draft.draft_id, team.fantasy_team_id, context.principal.userId).first<{ draft_queue_id: string }>();
   if (!queue) {
@@ -415,7 +440,7 @@ async function saveQueue(context: DraftContext, body: DraftQueueUpdateRequest): 
     context.db.prepare("delete from draft_queue_players where draft_queue_id = ?1").bind(queue.draft_queue_id),
     context.db.prepare("update draft_queues set autopick_enabled = ?1, revision_number = revision_number + 1, updated_at_utc = ?2 where draft_queue_id = ?3").bind(body.autopickEnabled ? 1 : 0, now, queue.draft_queue_id),
   ];
-  playerIds.forEach((playerId, index) => statements.push(context.db.prepare("insert into draft_queue_players (draft_queue_player_id, draft_queue_id, nfl_player_id, priority, created_at_utc) values (?1, ?2, ?3, ?4, ?5)").bind(newId("dqp"), queue!.draft_queue_id, playerId, index + 1, now)));
+  validPlayerIds.forEach((playerId, index) => statements.push(context.db.prepare("insert into draft_queue_players (draft_queue_player_id, draft_queue_id, nfl_player_id, priority, created_at_utc) values (?1, ?2, ?3, ?4, ?5)").bind(newId("dqp"), queue!.draft_queue_id, playerId, index + 1, now)));
   await context.db.batch(statements);
 }
 
@@ -462,7 +487,7 @@ async function chooseAutopick(context: DraftContext, env: Env): Promise<string |
     `select players.nfl_player_id from draft_queue_players players join draft_queues queues on queues.draft_queue_id = players.draft_queue_id
      where queues.draft_id = ?1 and queues.fantasy_team_id = ?2 order by players.priority`,
   ).bind(context.draft.draft_id, team.fantasy_team_id).all<{ nfl_player_id: string }>();
-  const fallback = await env.NFL_DB.prepare("select nfl_player_id, display_name, position, null as abbreviation, headshot_object_key, null as logo_object_key from nfl_players where position is not null order by display_name limit 800").all<PlayerRow>();
+  const fallback = await env.NFL_DB.prepare(`select nfl_player_id, display_name, position, current_team_id, null as abbreviation, headshot_object_key, null as logo_object_key from nfl_players where current_team_id is not null and ${fantasyPositionSql("position")} order by display_name limit 800`).all<PlayerRow>();
   const profiles = fallback.results ?? [];
   const ranking = await rankingContext(context.db, context.leagueId, context.seasonId);
   const [weights, rankings] = await Promise.all([
@@ -472,10 +497,19 @@ async function chooseAutopick(context: DraftContext, env: Env): Promise<string |
   const candidates = [...(queued.results ?? []).map((row) => row.nfl_player_id), ...profiles.sort((a, b) => (rankings.get(a.nfl_player_id)?.overallRank ?? 99999) - (rankings.get(b.nfl_player_id)?.overallRank ?? 99999) || (weights.get(b.position ?? "") ?? 0) - (weights.get(a.position ?? "") ?? 0) || a.display_name.localeCompare(b.display_name)).map((row) => row.nfl_player_id)];
   for (const playerId of candidates) {
     if (unavailable.has(playerId)) continue;
-    const player = await env.NFL_DB.prepare("select position from nfl_players where nfl_player_id = ?1").bind(playerId).first<{ position: string | null }>();
+    const player = await env.NFL_DB.prepare("select position, current_team_id from nfl_players where nfl_player_id = ?1").bind(playerId).first<{ position: string | null; current_team_id: string | null }>();
+    if (!player?.current_team_id || !isFantasyPosition(player.position)) continue;
     try { await requireRosterLegal(context.db, context.seasonId, team.fantasy_team_id, player?.position ?? ""); return playerId; } catch { continue; }
   }
   return null;
+}
+
+async function draftablePlayerIds(db: D1Database, playerIds: string[]): Promise<string[]> {
+  if (!playerIds.length) return [];
+  const placeholders = playerIds.map((_, index) => `?${index + 1}`).join(",");
+  const result = await db.prepare(`select nfl_player_id from nfl_players where nfl_player_id in (${placeholders}) and current_team_id is not null and ${fantasyPositionSql("position")}`).bind(...playerIds).all<{ nfl_player_id: string }>();
+  const valid = new Set((result.results ?? []).map((row) => row.nfl_player_id));
+  return playerIds.filter((playerId) => valid.has(playerId));
 }
 
 async function requireRosterLegal(db: D1Database, seasonId: string, teamId: string, position: string): Promise<void> {
@@ -510,8 +544,8 @@ async function refreshContext(context: DraftContext): Promise<DraftContext> { co
 async function loadTeams(db: D1Database, draftId: string): Promise<TeamRow[]> { const result = await db.prepare(`select teams.fantasy_team_id, teams.team_name, teams.manager_user_id, slots.slot_number from draft_slots slots join fantasy_teams teams on teams.fantasy_team_id = slots.fantasy_team_id where slots.draft_id = ?1 order by slots.slot_number`).bind(draftId).all<TeamRow>(); return result.results ?? []; }
 function teamView(row: TeamRow): DraftTeamView { return { fantasyTeamId: row.fantasy_team_id, teamName: row.team_name, managerUserId: row.manager_user_id, slotNumber: row.slot_number }; }
 function pickView(row: PickRow, player?: PlayerRow): DraftPickView { return { draftPickId: row.draft_pick_id, overallPick: row.overall_pick, roundNumber: row.round_number, slotNumber: row.slot_number, fantasyTeamId: row.fantasy_team_id, teamName: row.team_name, playerId: row.nfl_player_id ?? undefined, playerName: player?.display_name, position: player?.position ?? undefined, nflTeam: player?.abbreviation ?? undefined, selectionSource: row.selection_source, status: row.status, madeAtUtc: row.made_at_utc }; }
-function playerView(row: PlayerRow, rank: number, queued: boolean, drafted: boolean, ranking: FantasyProsRanking | undefined, env: Env, averageProjectedPointsPerGame?: number): DraftPlayerView { return { playerId: row.nfl_player_id, displayName: row.display_name, position: row.position ?? "UNK", nflTeam: row.abbreviation ?? undefined, headshotUrl: espnAthleteHeadshotUrl(env, row.nfl_player_id, row.headshot_object_key), nflTeamLogoUrl: providerAssetUrl(env, row.logo_object_key), rank, queued, drafted, expertConsensusRank: ranking?.overallRank, positionRank: ranking?.positionRank, tier: ranking?.tier, byeWeek: ranking?.byeWeek, rankingUpdatedAt: ranking?.sourceUpdatedAt ?? ranking?.fetchedAtUtc, averageProjectedPointsPerGame }; }
-async function loadPlayerProfiles(db: D1Database, ids: string[]): Promise<Map<string, PlayerRow>> { if (!ids.length) return new Map(); const placeholders = ids.map((_, index) => `?${index + 1}`).join(","); const result = await db.prepare(`select players.nfl_player_id, players.display_name, players.position, teams.abbreviation, players.headshot_object_key, teams.logo_object_key from nfl_players players left join nfl_teams teams on teams.nfl_team_id = players.current_team_id where players.nfl_player_id in (${placeholders})`).bind(...ids).all<PlayerRow>(); return new Map((result.results ?? []).map((row) => [row.nfl_player_id, row])); }
+function playerView(row: PlayerRow, rank: number, queued: boolean, drafted: boolean, ranking: FantasyProsRanking | undefined, env: Env, averageProjectedPointsPerGame?: number, projectedPoints?: number): DraftPlayerView { return { playerId: row.nfl_player_id, displayName: row.display_name, position: row.position ?? "UNK", nflTeam: row.abbreviation ?? undefined, headshotUrl: espnAthleteHeadshotUrl(env, row.nfl_player_id, row.headshot_object_key), nflTeamLogoUrl: providerAssetUrl(env, row.logo_object_key), rank, queued, drafted, expertConsensusRank: ranking?.overallRank, positionRank: ranking?.positionRank, tier: ranking?.tier, byeWeek: ranking?.byeWeek, rankingUpdatedAt: ranking?.sourceUpdatedAt ?? ranking?.fetchedAtUtc, projectedPoints, averageProjectedPointsPerGame }; }
+async function loadPlayerProfiles(db: D1Database, ids: string[]): Promise<Map<string, PlayerRow>> { if (!ids.length) return new Map(); const placeholders = ids.map((_, index) => `?${index + 1}`).join(","); const result = await db.prepare(`select players.nfl_player_id, players.display_name, players.position, players.current_team_id, teams.abbreviation, players.headshot_object_key, teams.logo_object_key from nfl_players players left join nfl_teams teams on teams.nfl_team_id = players.current_team_id where players.nfl_player_id in (${placeholders})`).bind(...ids).all<PlayerRow>(); return new Map((result.results ?? []).map((row) => [row.nfl_player_id, row])); }
 async function loadQueuePlayerIds(context: DraftContext): Promise<Array<{ nfl_player_id: string }>> { const result = await context.db.prepare(`select players.nfl_player_id from draft_queue_players players join draft_queues queues on queues.draft_queue_id = players.draft_queue_id where queues.draft_id = ?1 and queues.user_id = ?2 order by players.priority`).bind(context.draft.draft_id, context.principal.userId).all<{ nfl_player_id: string }>(); return result.results ?? []; }
 async function positionWeights(db: D1Database, seasonId: string): Promise<Map<string, number>> { const weights = new Map(Object.entries({ QB: 90, RB: 82, WR: 80, TE: 70, K: 35, DST: 45, DL: 40, LB: 44, DB: 42 })); const rules = await db.prepare(`select rules.statistic_key, rules.point_value_milli from scoring_rules rules join scoring_versions versions on versions.scoring_version_id = rules.scoring_version_id where versions.league_season_id = ?1 and versions.status = 'active' and rules.enabled = 1`).bind(seasonId).all<{ statistic_key: string; point_value_milli: number }>(); for (const rule of rules.results ?? []) { if (rule.statistic_key === "receptions") { weights.set("RB", (weights.get("RB") ?? 0) + rule.point_value_milli / 1000); weights.set("WR", (weights.get("WR") ?? 0) + rule.point_value_milli / 1000); weights.set("TE", (weights.get("TE") ?? 0) + rule.point_value_milli / 1000); } if (rule.statistic_key === "tight_end_reception_bonus") weights.set("TE", (weights.get("TE") ?? 0) + rule.point_value_milli / 500); if (rule.statistic_key.startsWith("idp_")) ["DL", "LB", "DB"].forEach((position) => weights.set(position, (weights.get(position) ?? 0) + 8)); } return weights; }
 function audit(context: DraftContext, action: string, entityType: string, entityId: string, correlationId: string, before: unknown, after: unknown): D1PreparedStatement { return context.db.prepare(`insert into draft_audit_events (draft_audit_event_id, draft_id, actor_user_id, action, entity_type, entity_id, before_json, after_json, correlation_id, created_at_utc) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`).bind(newId("dae"), context.draft.draft_id, context.principal.userId, action, entityType, entityId, before === null ? null : JSON.stringify(before), after === null ? null : JSON.stringify(after), correlationId, new Date().toISOString()); }

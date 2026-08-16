@@ -1991,6 +1991,14 @@ textarea {
 .test-scoreboard > section span { color: #75a9ff; font-size: 10px; font-weight: 900; text-transform: uppercase; }
 .test-scoreboard > section b { color: #fff; font-size: 24px; }
 .test-scoreboard > section small { font-size: 9px; }
+.nfl-game-list { display: grid; gap: 8px; margin-top: 12px; }
+.nfl-game-card { min-height: 48px; display: grid; grid-template-columns: minmax(80px, 1fr) auto minmax(80px, 1fr) auto; align-items: center; gap: 12px; border: 1px solid #2c384b; background: #08111e; padding: 8px 12px; }
+.nfl-game-card span { display: grid; min-width: 0; }
+.nfl-game-card span:nth-child(3) { text-align: right; }
+.nfl-game-card b { font-size: 13px; }
+.nfl-game-card small, .nfl-game-card time { color: #8290a3; font-size: 9px; }
+.nfl-game-card strong { color: #d7e6ff; font: 800 13px Consolas, monospace; }
+.nfl-game-card.in { border-color: #2563eb; background: #0b1830; }
 .test-team-mark { min-width: 54px; min-height: 38px; display: grid; place-content: center; border: 1px solid #45566d; border-radius: 4px; font-size: 13px; font-weight: 900; }
 .test-team-mark.home { border-color: #347cf5; background: #153477; }
 .test-team-mark.away { border-color: #dc2626; background: #65151c; }
@@ -2062,6 +2070,7 @@ textarea {
 .draft-player-list { max-height: 520px; overflow-y: auto; border-top: 1px solid #344154; }
 .draft-player-list > div { min-height: 54px; display: grid; grid-template-columns: 34px 34px minmax(140px, 1fr) 70px 36px 64px; align-items: center; gap: 8px; border-bottom: 1px solid #273243; padding: 5px 0; }
 .draft-player-list > div.drafted { opacity: 0.42; }
+.draft-player-list > div.free-agent { opacity: 0.58; }
 .draft-player-list > div > b { color: #64748b; font: 700 10px Consolas, monospace; text-align: center; }
 .draft-player-list > div > span { display: grid; }
 .draft-player-list > div > span strong { font-size: 12px; }
