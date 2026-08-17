@@ -2134,9 +2134,13 @@ textarea {
 .player-profile > p { color: #8f9bad; }
 .profile-injury { display: inline-block; margin: 4px 0 12px; border: 1px solid #dc2626; border-radius: 4px; background: #361017; padding: 5px 8px; color: #ff9aa1; font-size: 9px; font-weight: 800; text-transform: uppercase; }
 .profile-outlook { margin-top: 18px; border-top: 1px solid #344154; padding-top: 16px; }
-.profile-outlook h3 { margin: 0 0 8px; font-size: 14px; }
+.profile-outlook header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.profile-outlook h3 { margin: 0; font-size: 14px; }
 .profile-outlook p { margin: 0; max-width: 980px; color: #aab6c8; font-size: 12px; line-height: 20px; }
 .profile-outlook.compact p { font-size: 11px; line-height: 18px; }
+.espn-credit { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; color: #7f8da2; text-transform: uppercase; }
+.espn-credit small { font-size: 7px; font-weight: 800; letter-spacing: 0; }
+.espn-credit b { border: 1px solid rgba(220, 38, 38, .6); border-radius: 3px; background: #16090c; padding: 3px 6px 2px; color: #ff4c55; font-size: 10px; line-height: 1; font-weight: 900; letter-spacing: 0; }
 .profile-games { margin-top: 24px; border-top: 1px solid #344154; padding-top: 16px; }
 .profile-games h3 { font-size: 14px; }
 .profile-games > div { display: grid; grid-template-columns: 145px minmax(0,1fr); gap: 10px; border-bottom: 1px solid #273243; padding: 8px 0; }
